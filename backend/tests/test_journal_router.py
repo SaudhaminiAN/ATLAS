@@ -1,4 +1,4 @@
-"""Decision REST endpoint tests."""
+"""Journal REST endpoint tests."""
 
 from datetime import UTC, datetime
 from decimal import Decimal
@@ -12,6 +12,7 @@ from atlas.application.container import Container
 from atlas.domain.models.decision import TradingDecision
 from atlas.domain.models.enums import Direction
 from atlas.domain.models.instrument import Instrument
+from atlas.domain.models.journal import PaginatedResult
 from atlas.infrastructure.config import Settings
 from atlas.infrastructure.events.in_memory_bus import InMemoryEventBus
 from atlas.presentation.api.main import create_app
@@ -19,7 +20,7 @@ from atlas.presentation.api.main import create_app
 
 @pytest.fixture
 def app():
-    """FastAPI app with mocked decision service."""
+    """FastAPI app with mocked journal service."""
     settings = Settings(
         jwt_secret="test-secret-key-for-pytest-only-32chars",
         log_json=False,
@@ -44,13 +45,19 @@ def app():
         confluence_score=Decimal("0.55"),
         strategy_id="test",
         reason="Confluence below threshold",
-        correlation_id="cid-1",
+        correlation_id="corr-abc",
         decided_at=datetime.now(UTC),
     )
 
-    decision_engine = MagicMock()
-    decision_engine.get_latest = AsyncMock(return_value=decision)
-    decision_engine.get_history = AsyncMock(return_value=[decision])
+    journal_service = MagicMock()
+    journal_service.query_decisions = AsyncMock(
+        return_value=PaginatedResult(
+            items=(decision,),
+            total=1,
+            limit=50,
+            offset=0,
+        )
+    )
 
     application.state.container = Container(
         settings=settings,
@@ -72,48 +79,31 @@ def app():
         price_action_service=MagicMock(),
         confluence_service=MagicMock(),
         trade_validation_service=MagicMock(),
-        decision_engine=decision_engine,
-        journal_service=MagicMock(),
+        decision_engine=MagicMock(),
+        journal_service=journal_service,
     )
     application.state.ws_manager = MagicMock()
     return application
 
 
 @pytest.mark.asyncio
-async def test_get_latest_decision(app) -> None:
+async def test_query_journal_decisions(app) -> None:
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
-        response = await client.get("/api/v1/decisions/XAUUSD/latest")
+        response = await client.get(
+            "/api/v1/journal/decisions",
+            params={
+                "symbol": "XAUUSD",
+                "direction": "WAIT",
+                "correlation_id": "corr-abc",
+            },
+        )
 
     assert response.status_code == 200
     body = response.json()
     assert body["success"] is True
-    assert body["data"]["symbol"] == "XAUUSD"
-    assert body["data"]["direction"] == "WAIT"
-    assert body["data"]["reason"] == "Confluence below threshold"
+    assert body["data"]["total"] == 1
+    assert body["data"]["items"][0]["direction"] == "WAIT"
+    assert body["data"]["items"][0]["correlation_id"] == "corr-abc"
 
-
-@pytest.mark.asyncio
-async def test_get_latest_decision_not_found(app) -> None:
-    app.state.container.decision_engine.get_latest = AsyncMock(return_value=None)
-
-    transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://test") as client:
-        response = await client.get("/api/v1/decisions/XAUUSD/latest")
-
-    assert response.status_code == 200
-    body = response.json()
-    assert body["success"] is False
-    assert body["error"]["code"] == "NOT_FOUND"
-
-
-@pytest.mark.asyncio
-async def test_get_decision_history(app) -> None:
-    transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://test") as client:
-        response = await client.get("/api/v1/decisions/XAUUSD/history?limit=10")
-
-    assert response.status_code == 200
-    body = response.json()
-    assert body["success"] is True
-    assert len(body["data"]) == 1
+    app.state.container.journal_service.query_decisions.assert_awaited_once()

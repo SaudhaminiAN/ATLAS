@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from atlas.application.confluence.service import ConfluenceConfig, ConfluenceService
 from atlas.application.decision.service import DecisionEngineService
+from atlas.application.journal.service import JournalService
 from atlas.application.market_context.service import MarketContextConfig, MarketContextService
 from atlas.application.market_data.service import MarketDataConfig, MarketDataService
 from atlas.application.mtf.service import MTFConfig, MultiTimeframeAnalysisService
@@ -58,6 +59,7 @@ class Container:
     confluence_service: ConfluenceService
     trade_validation_service: TradeValidationService
     decision_engine: DecisionEngineService
+    journal_service: JournalService
 
 
 def build_container(settings: Settings, engine: AsyncEngine, redis: Redis) -> Container:
@@ -205,6 +207,7 @@ def build_container(settings: Settings, engine: AsyncEngine, redis: Redis) -> Co
         session_factory=session_factory,
         decision_cache=DecisionCache(redis),
     )
+    journal_service = JournalService(session_factory=session_factory)
     dedupe_cache = PipelineDedupeCache(
         redis,
         ttl_seconds=settings.pipeline_dedupe_window_seconds,
@@ -256,4 +259,5 @@ def build_container(settings: Settings, engine: AsyncEngine, redis: Redis) -> Co
         confluence_service=confluence_service,
         trade_validation_service=trade_validation_service,
         decision_engine=decision_engine,
+        journal_service=journal_service,
     )

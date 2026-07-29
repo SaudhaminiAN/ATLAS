@@ -52,6 +52,7 @@ def app(test_settings: Settings):
         confluence_service=MagicMock(),
         trade_validation_service=MagicMock(),
         decision_engine=MagicMock(),
+        journal_service=MagicMock(),
     )
     application.state.container = container
     application.state.ws_manager = MagicMock()

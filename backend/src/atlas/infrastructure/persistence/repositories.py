@@ -4,13 +4,14 @@ from datetime import datetime
 from decimal import Decimal
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from atlas.domain.models.decision import TradingDecision
 from atlas.domain.models.enums import Direction, Timeframe
 from atlas.domain.models.instrument import Instrument
+from atlas.domain.models.journal import DecisionFilters
 from atlas.domain.models.news import EconomicEvent, EventImpact
 from atlas.domain.models.ohlcv import OHLCVBar
 from atlas.domain.models.pipeline import PipelineRun, StageResult
@@ -426,35 +427,89 @@ class DecisionRepository:
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
 
-    async def insert(self, decision: TradingDecision) -> None:
-        """Persist an immutable decision record."""
-        model = DecisionModel(
-            id=decision.id,
-            instrument_id=decision.instrument.id,
-            correlation_id=decision.correlation_id,
-            direction=decision.direction.value,
-            is_actionable=decision.is_actionable,
-            reason=decision.reason,
-            confidence=decision.confluence_score,
-            strategy_profile_id=decision.strategy_id,
-            confluence_snapshot=(
+    def _decision_values(self, decision: TradingDecision) -> dict:
+        return {
+            "id": decision.id,
+            "instrument_id": decision.instrument.id,
+            "correlation_id": decision.correlation_id,
+            "direction": decision.direction.value,
+            "is_actionable": decision.is_actionable,
+            "reason": decision.reason,
+            "confidence": decision.confluence_score,
+            "strategy_profile_id": decision.strategy_id,
+            "confluence_snapshot": (
                 confluence_to_dict(decision.confluence_snapshot)
                 if decision.confluence_snapshot
                 else None
             ),
-            validation_result=(
+            "validation_result": (
                 validation_to_dict(decision.validation_snapshot)
                 if decision.validation_snapshot
                 else None
             ),
-            risk_snapshot=decision.risk_snapshot,
-            news_status=(
+            "risk_snapshot": decision.risk_snapshot,
+            "news_status": (
                 news_status_to_dict(decision.news_status) if decision.news_status else None
             ),
-            created_at=decision.decided_at,
-        )
+            "created_at": decision.decided_at,
+        }
+
+    async def insert(self, decision: TradingDecision) -> None:
+        """Persist an immutable decision record."""
+        model = DecisionModel(**self._decision_values(decision))
         self._session.add(model)
         await self._session.commit()
+
+    async def insert_idempotent(self, decision: TradingDecision) -> bool:
+        """Insert decision; return True if a new row was created."""
+        stmt = (
+            insert(DecisionModel)
+            .values(**self._decision_values(decision))
+            .on_conflict_do_nothing(index_elements=["id"])
+        )
+        result = await self._session.execute(stmt)
+        await self._session.commit()
+        return result.rowcount > 0
+
+    def _apply_filters(self, query, filters: DecisionFilters):
+        if filters.symbol:
+            query = query.where(InstrumentModel.symbol == filters.symbol.upper())
+        if filters.direction is not None:
+            query = query.where(DecisionModel.direction == filters.direction.value)
+        if filters.is_actionable is not None:
+            query = query.where(DecisionModel.is_actionable.is_(filters.is_actionable))
+        if filters.correlation_id:
+            query = query.where(DecisionModel.correlation_id == filters.correlation_id)
+        if filters.start is not None:
+            query = query.where(DecisionModel.created_at >= filters.start)
+        if filters.end is not None:
+            query = query.where(DecisionModel.created_at <= filters.end)
+        return query
+
+    async def query(self, filters: DecisionFilters) -> list[TradingDecision]:
+        """Return filtered paginated decisions."""
+        query = (
+            select(DecisionModel, InstrumentModel)
+            .join(InstrumentModel, DecisionModel.instrument_id == InstrumentModel.id)
+            .order_by(DecisionModel.created_at.desc())
+            .limit(filters.limit)
+            .offset(filters.offset)
+        )
+        query = self._apply_filters(query, filters)
+        result = await self._session.execute(query)
+        return [
+            _decision_model_to_domain(decision_model, instrument_to_domain(instrument_model))
+            for decision_model, instrument_model in result.all()
+        ]
+
+    async def count(self, filters: DecisionFilters) -> int:
+        """Count decisions matching filters."""
+        query = select(func.count()).select_from(DecisionModel).join(
+            InstrumentModel, DecisionModel.instrument_id == InstrumentModel.id
+        )
+        query = self._apply_filters(query, filters)
+        result = await self._session.execute(query)
+        return int(result.scalar_one())
 
     async def get_latest(self, symbol: str) -> TradingDecision | None:
         """Return the most recent decision for a symbol."""

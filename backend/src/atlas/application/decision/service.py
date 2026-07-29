@@ -15,6 +15,7 @@ from atlas.domain.models.strategy import StrategyProfile
 from atlas.domain.models.validation import ValidationResult
 from atlas.domain.ports.event_bus import EventBusProtocol
 from atlas.infrastructure.cache.decision_cache import DecisionCache
+from atlas.infrastructure.persistence.decision_serializers import decision_to_cache_dict
 from atlas.infrastructure.persistence.repositories import DecisionRepository
 
 logger = structlog.get_logger(__name__)
@@ -153,6 +154,7 @@ class DecisionEngineService:
                     "reason": decision.reason,
                     "strategy_id": decision.strategy_id,
                     "decided_at": decision.decided_at.isoformat(),
+                    "decision_snapshot": decision_to_cache_dict(decision),
                 },
             )
         )

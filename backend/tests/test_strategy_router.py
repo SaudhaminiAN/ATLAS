@@ -67,6 +67,7 @@ def app():
         confluence_service=MagicMock(),
         trade_validation_service=MagicMock(),
         decision_engine=MagicMock(),
+        journal_service=MagicMock(),
     )
     application.state.ws_manager = MagicMock()
     return application

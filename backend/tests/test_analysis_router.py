@@ -187,6 +187,7 @@ def app():
             )
         ),
         decision_engine=MagicMock(),
+        journal_service=MagicMock(),
     )
     application.state.ws_manager = MagicMock()
     return application

@@ -9,6 +9,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from atlas.application.container import build_container
+from atlas.application.journal.handler import make_journal_decision_handler
 from atlas.application.market_context.handler import make_bar_context_handler
 from atlas.application.market_data.stream import run_mock_market_data_stream
 from atlas.application.news.sync import run_news_calendar_sync
@@ -22,6 +23,7 @@ from atlas.presentation.api.routers import (
     decisions,
     health,
     instruments,
+    journal,
     market_data,
     news,
     strategy,
@@ -48,6 +50,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.ws_manager = ws_manager
     container.event_bus.subscribe("market_data.bar.received", ws_manager.on_bar_received)
     container.event_bus.subscribe("decision.emitted", ws_manager.on_decision_emitted)
+    container.event_bus.subscribe(
+        "decision.emitted",
+        make_journal_decision_handler(container),
+    )
     container.event_bus.subscribe(
         "market_data.bar.received",
         make_bar_context_handler(container, settings),
@@ -114,6 +120,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(news.router, prefix=settings.api_prefix)
     app.include_router(analysis.router, prefix=settings.api_prefix)
     app.include_router(decisions.router, prefix=settings.api_prefix)
+    app.include_router(journal.router, prefix=settings.api_prefix)
     app.include_router(ws_routes.router, prefix=settings.api_prefix)
 
     return app

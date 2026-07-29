@@ -22,3 +22,9 @@ class TradeDTO(BaseModel):
     opened_at: datetime
     closed_at: datetime | None
     realized_pnl: Decimal | None
+    remaining_size: Decimal | None = None
+    partial_realized_pnl: Decimal | None = None
+
+
+class CloseTradeRequest(BaseModel):
+    reason: str = "manual"

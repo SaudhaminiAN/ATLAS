@@ -85,6 +85,8 @@ def app():
         analytics_service=MagicMock(),
         risk_management_service=MagicMock(),
         execution_service=MagicMock(),
+        position_management_service=MagicMock(),
+        ai_explanation_service=MagicMock(),
     )
     application.state.ws_manager = MagicMock()
     return application
@@ -111,3 +113,57 @@ async def test_query_journal_decisions(app) -> None:
     assert body["data"]["items"][0]["correlation_id"] == "corr-abc"
 
     app.state.container.journal_service.query_decisions.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_get_trade_journal_endpoint(app) -> None:
+    from atlas.domain.models.journal import TradeJournalView
+
+    trade_id = uuid4()
+    app.state.container.journal_service.get_trade_journal = AsyncMock(
+        return_value=TradeJournalView(
+            trade_id=trade_id,
+            decision_id=uuid4(),
+            symbol="XAUUSD",
+            direction="BUY",
+            status="open",
+            events=(),
+            notes=(),
+        )
+    )
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.get(f"/api/v1/journal/trades/{trade_id}")
+
+    assert response.status_code == 200
+    assert response.json()["data"]["symbol"] == "XAUUSD"
+
+
+@pytest.mark.asyncio
+async def test_add_trade_note_endpoint(app) -> None:
+    from atlas.domain.models.journal import JournalEntry
+
+    trade_id = uuid4()
+    app.state.container.journal_service.add_note = AsyncMock(
+        return_value=JournalEntry(
+            id=uuid4(),
+            decision_id=uuid4(),
+            trade_id=trade_id,
+            user_id=uuid4(),
+            entry_type="note",
+            content="Strong setup",
+            tags=("smc",),
+            created_at=datetime.now(UTC),
+        )
+    )
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.post(
+            f"/api/v1/journal/trades/{trade_id}/notes",
+            json={"content": "Strong setup", "tags": ["smc"]},
+        )
+
+    assert response.status_code == 200
+    assert response.json()["data"]["content"] == "Strong setup"

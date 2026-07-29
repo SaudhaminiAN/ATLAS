@@ -209,3 +209,33 @@ export interface PerformanceSummary {
   total_pnl: string | number;
   max_drawdown: string | number;
 }
+
+export interface DecisionExplanation {
+  id: string;
+  decision_id: string;
+  content: string;
+  provider: string;
+  created_at: string;
+}
+
+export type TradeStatus = "open" | "partial" | "closed" | "rejected" | "cancelled";
+
+export interface Trade {
+  id: string;
+  decision_id: string;
+  symbol: string;
+  direction: Direction;
+  status: TradeStatus;
+  entry_price: string | number;
+  fill_price: string | number | null;
+  stop_loss: string | number;
+  take_profit: string | number;
+  position_size: string | number;
+  execution_mode: string;
+  rejection_reason: string | null;
+  opened_at: string;
+  closed_at: string | null;
+  realized_pnl: string | number | null;
+  remaining_size: string | number | null;
+  partial_realized_pnl: string | number | null;
+}

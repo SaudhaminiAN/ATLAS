@@ -14,6 +14,7 @@ class TradeStatus(StrEnum):
     """Trade lifecycle status."""
 
     OPEN = "open"
+    PARTIAL = "partial"
     CLOSED = "closed"
     REJECTED = "rejected"
     CANCELLED = "cancelled"
@@ -70,6 +71,11 @@ class Trade:
     opened_at: datetime
     closed_at: datetime | None
     realized_pnl: Decimal | None
+    initial_stop_loss: Decimal | None = None
+    remaining_size: Decimal | None = None
+    partial_realized_pnl: Decimal = Decimal("0")
+    breakeven_applied: bool = False
+    partial_exit_applied: bool = False
 
 
 @dataclass(frozen=True, slots=True)

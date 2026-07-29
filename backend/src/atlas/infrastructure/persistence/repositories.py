@@ -550,6 +550,19 @@ class DecisionRepository:
         decision_model, instrument_model = row
         return _decision_model_to_domain(decision_model, instrument_to_domain(instrument_model))
 
+    async def get_by_id(self, decision_id: UUID) -> TradingDecision | None:
+        """Return a decision by primary key."""
+        result = await self._session.execute(
+            select(DecisionModel, InstrumentModel)
+            .join(InstrumentModel, DecisionModel.instrument_id == InstrumentModel.id)
+            .where(DecisionModel.id == decision_id)
+        )
+        row = result.first()
+        if not row:
+            return None
+        decision_model, instrument_model = row
+        return _decision_model_to_domain(decision_model, instrument_to_domain(instrument_model))
+
     async def list_history(
         self,
         symbol: str,

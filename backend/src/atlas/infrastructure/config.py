@@ -88,6 +88,27 @@ class Settings(BaseSettings):
     execution_mode: str = "paper"
     execution_paper_slippage_pips: float = 0.5
 
+    position_management_enabled: bool = True
+    position_breakeven_at_r: float = 1.0
+    position_trailing_enabled: bool = True
+    position_trailing_method: str = "atr"
+    position_trailing_atr_multiplier: float = 1.5
+    position_partial_exit_enabled: bool = True
+    position_partial_exit_percent: float = 50.0
+    position_partial_exit_at_r: float = 1.5
+    position_tp2_at_r: float = 3.0
+    position_min_lot: float = 0.01
+
+    journal_default_user_id: str = "00000000-0000-4000-8000-000000000001"
+
+    ai_explanation_enabled: bool = True
+    ai_explanation_auto: bool = False
+    ai_explanation_provider: str = "mock"
+    ai_explanation_max_tokens: int = 500
+    ai_explanation_rate_limit_per_minute: int = 10
+    openai_api_key: str | None = None
+    openai_model: str = "gpt-4o-mini"
+
 
 @lru_cache
 def get_settings() -> Settings:

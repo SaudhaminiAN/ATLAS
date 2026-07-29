@@ -103,8 +103,8 @@ class ExecutionService:
             return await self._reject(decision, f"Provider error: {exc}")
 
         if result.status == OrderStatus.FILLED:
-            await self._persist_open_trade(decision, request, result)
-            self._publish("trade.opened", decision, result)
+            trade = await self._persist_open_trade(decision, request, result)
+            self._publish("trade.opened", decision, result, trade_id=trade.id)
             logger.info(
                 "trade_opened",
                 decision_id=str(decision.id),
@@ -122,8 +122,8 @@ class ExecutionService:
             fill_price=None,
             rejection_reason=reason,
         )
-        await self._persist_rejected_trade(decision, reason)
-        self._publish("trade.rejected", decision, result)
+        trade = await self._persist_rejected_trade(decision, reason)
+        self._publish("trade.rejected", decision, result, trade_id=trade.id)
         logger.warning("trade_rejected", decision_id=str(decision.id), reason=reason)
         return result
 
@@ -136,7 +136,7 @@ class ExecutionService:
         decision: TradingDecision,
         request: OrderRequest,
         result: OrderResult,
-    ) -> None:
+    ) -> Trade:
         now = datetime.now(UTC)
         trade = Trade(
             id=uuid4(),
@@ -154,6 +154,8 @@ class ExecutionService:
             opened_at=now,
             closed_at=None,
             realized_pnl=None,
+            initial_stop_loss=request.stop_loss,
+            remaining_size=request.position_size,
         )
         async with self.session_factory() as session:
             repo = TradeRepository(session)
@@ -171,8 +173,9 @@ class ExecutionService:
                     created_at=now,
                 )
             )
+        return trade
 
-    async def _persist_rejected_trade(self, decision: TradingDecision, reason: str) -> None:
+    async def _persist_rejected_trade(self, decision: TradingDecision, reason: str) -> Trade:
         params = _params_from_risk_snapshot(decision)
         now = datetime.now(UTC)
         trade = Trade(
@@ -204,20 +207,31 @@ class ExecutionService:
                     created_at=now,
                 )
             )
+        return trade
 
-    def _publish(self, event_type: str, decision: TradingDecision, result: OrderResult) -> None:
+    def _publish(
+        self,
+        event_type: str,
+        decision: TradingDecision,
+        result: OrderResult,
+        *,
+        trade_id: UUID | None = None,
+    ) -> None:
+        payload = {
+            "decision_id": str(decision.id),
+            "symbol": decision.instrument.symbol,
+            "direction": decision.direction.value,
+            "status": result.status.value,
+            "fill_price": str(result.fill_price) if result.fill_price else None,
+            "rejection_reason": result.rejection_reason,
+        }
+        if trade_id is not None:
+            payload["trade_id"] = str(trade_id)
         self.event_bus.publish(
             DomainEvent(
                 event_type=event_type,
                 correlation_id=decision.correlation_id,
-                payload={
-                    "decision_id": str(decision.id),
-                    "symbol": decision.instrument.symbol,
-                    "direction": decision.direction.value,
-                    "status": result.status.value,
-                    "fill_price": str(result.fill_price) if result.fill_price else None,
-                    "rejection_reason": result.rejection_reason,
-                },
+                payload=payload,
             )
         )
 

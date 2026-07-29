@@ -35,6 +35,30 @@ class PaginatedResult(Generic[T]):
 
 
 @dataclass(frozen=True, slots=True)
+class TradeLifecycleEvent:
+    """Trade lifecycle event consumed by the journal."""
+
+    trade_id: UUID
+    event_type: str
+    payload: dict
+    correlation_id: str
+    occurred_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class TradeJournalView:
+    """Combined trade header, lifecycle events, and notes."""
+
+    trade_id: UUID
+    decision_id: UUID
+    symbol: str
+    direction: str
+    status: str
+    events: tuple[dict, ...]
+    notes: tuple["JournalEntry", ...]
+
+
+@dataclass(frozen=True, slots=True)
 class JournalEntry:
     """Trader note attached to a decision or trade (Phase 3)."""
 

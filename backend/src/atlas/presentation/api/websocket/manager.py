@@ -73,3 +73,19 @@ class WebSocketManager:
             loop.create_task(self.broadcast(channel, message))
         except RuntimeError:
             pass
+
+    def on_trade_event(self, event: DomainEvent) -> None:
+        """Broadcast position updates to subscribers."""
+        symbol = event.payload.get("symbol", "XAUUSD")
+        channel = f"positions.{symbol}"
+        message = {
+            "channel": channel,
+            "event": event.event_type,
+            "payload": event.payload,
+            "timestamp": event.occurred_at.isoformat(),
+        }
+        try:
+            loop = asyncio.get_running_loop()
+            loop.create_task(self.broadcast(channel, message))
+        except RuntimeError:
+            pass

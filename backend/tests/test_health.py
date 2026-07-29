@@ -57,6 +57,8 @@ def app(test_settings: Settings):
         analytics_service=MagicMock(),
         risk_management_service=MagicMock(),
         execution_service=MagicMock(),
+        position_management_service=MagicMock(),
+        ai_explanation_service=MagicMock(),
     )
     application.state.container = container
     application.state.ws_manager = MagicMock()

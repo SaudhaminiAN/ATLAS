@@ -19,6 +19,13 @@ export function formatTime(iso: string): string {
   });
 }
 
+export function formatPnl(value: string | number | null | undefined): string {
+  if (value === null || value === undefined) return "—";
+  const n = toNumber(value);
+  const sign = n >= 0 ? "+" : "";
+  return `${sign}${n.toFixed(2)}`;
+}
+
 export function formatSession(session: string): string {
   return session.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 }

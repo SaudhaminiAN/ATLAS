@@ -2,10 +2,12 @@
 
 from dataclasses import dataclass
 from decimal import Decimal
+from uuid import UUID
 
 from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
+from atlas.application.ai.service import AIExplanationService
 from atlas.application.analytics.service import AnalyticsService
 from atlas.application.backtesting.runner import BacktestRunner
 from atlas.application.confluence.service import ConfluenceConfig, ConfluenceService
@@ -19,17 +21,20 @@ from atlas.application.news.service import NewsFilterService
 from atlas.application.pipeline.orchestrator import AnalysisPipelineOrchestrator, PipelineConfig
 from atlas.application.price_action.service import PriceActionConfig, PriceActionService
 from atlas.application.smc.service import SmartMoneyConceptsService, SMCConfig
+from atlas.application.position_management.service import PositionManagementService
 from atlas.application.risk.service import RiskManagementService
 from atlas.application.strategy.service import StrategyEngineService
 from atlas.application.technical.service import TechnicalAnalysisConfig, TechnicalAnalysisService
 from atlas.application.validation.service import TradeValidationConfig, TradeValidationService
 from atlas.domain.models.enums import Timeframe
+from atlas.domain.models.position_management import PositionManagementConfig
 from atlas.domain.ports.event_bus import EventBusProtocol
 from atlas.domain.services.news_window import NewsFilterConfig
 from atlas.infrastructure.cache.bar_cache import BarCache
 from atlas.infrastructure.cache.context_cache import ContextCache
 from atlas.infrastructure.cache.decision_cache import DecisionCache
 from atlas.infrastructure.cache.execution_idempotency import ExecutionIdempotencyCache
+from atlas.infrastructure.cache.explanation_rate_limit import ExplanationRateLimiter
 from atlas.infrastructure.cache.news_cache import NewsEventCache
 from atlas.infrastructure.cache.pipeline_dedupe import PipelineDedupeCache
 from atlas.infrastructure.cache.strategy_cache import StrategyProfileCache
@@ -70,10 +75,24 @@ class Container:
     analytics_service: AnalyticsService
     risk_management_service: RiskManagementService
     execution_service: ExecutionService
+    position_management_service: PositionManagementService
+    ai_explanation_service: AIExplanationService
+
+
+def _build_explanation_provider(settings: Settings):
+    if settings.ai_explanation_provider == "openai" and settings.openai_api_key:
+        from atlas.infrastructure.ai.openai_provider import OpenAIExplanationProvider
+
+        return OpenAIExplanationProvider(
+            api_key=settings.openai_api_key,
+            model=settings.openai_model,
+        )
+    from atlas.infrastructure.ai.mock_provider import MockExplanationProvider
+
+    return MockExplanationProvider()
 
 
 def build_container(settings: Settings, engine: AsyncEngine, redis: Redis) -> Container:
-    """Wire dependencies for the application."""
     from atlas.infrastructure.persistence.database import create_session_factory
 
     event_bus = InMemoryEventBus()
@@ -217,7 +236,10 @@ def build_container(settings: Settings, engine: AsyncEngine, redis: Redis) -> Co
         session_factory=session_factory,
         decision_cache=DecisionCache(redis),
     )
-    journal_service = JournalService(session_factory=session_factory)
+    journal_service = JournalService(
+        session_factory=session_factory,
+        default_user_id=UUID(settings.journal_default_user_id),
+    )
     analytics_service = AnalyticsService(session_factory=session_factory)
     risk_management_service = RiskManagementService(
         session_factory=session_factory,
@@ -232,6 +254,24 @@ def build_container(settings: Settings, engine: AsyncEngine, redis: Redis) -> Co
         idempotency_cache=execution_idempotency,
         event_bus=event_bus,
         execution_mode=settings.execution_mode,
+    )
+    position_management_service = PositionManagementService(
+        session_factory=session_factory,
+        market_data_service=market_data_service,
+        event_bus=event_bus,
+        config=PositionManagementConfig(
+            breakeven_at_r=Decimal(str(settings.position_breakeven_at_r)),
+            trailing_enabled=settings.position_trailing_enabled,
+            trailing_method=settings.position_trailing_method,
+            trailing_atr_multiplier=Decimal(str(settings.position_trailing_atr_multiplier)),
+            partial_exit_enabled=settings.position_partial_exit_enabled,
+            partial_exit_percent=Decimal(str(settings.position_partial_exit_percent)),
+            partial_exit_at_r=Decimal(str(settings.position_partial_exit_at_r)),
+            tp2_at_r=Decimal(str(settings.position_tp2_at_r)),
+            min_lot=Decimal(str(settings.position_min_lot)),
+        ),
+        primary_timeframe=Timeframe(settings.market_context_primary_timeframe),
+        atr_period=settings.market_context_atr_period,
     )
     dedupe_cache = PipelineDedupeCache(
         redis,
@@ -268,6 +308,16 @@ def build_container(settings: Settings, engine: AsyncEngine, redis: Redis) -> Co
         market_data_service=market_data_service,
         market_data_replay=market_data_replay,
     )
+    ai_explanation_service = AIExplanationService(
+        session_factory=session_factory,
+        provider=_build_explanation_provider(settings),
+        rate_limiter=ExplanationRateLimiter(
+            redis,
+            limit_per_minute=settings.ai_explanation_rate_limit_per_minute,
+        ),
+        max_tokens=settings.ai_explanation_max_tokens,
+        enabled=settings.ai_explanation_enabled,
+    )
 
     return Container(
         settings=settings,
@@ -297,4 +347,6 @@ def build_container(settings: Settings, engine: AsyncEngine, redis: Redis) -> Co
         analytics_service=analytics_service,
         risk_management_service=risk_management_service,
         execution_service=execution_service,
+        position_management_service=position_management_service,
+        ai_explanation_service=ai_explanation_service,
     )

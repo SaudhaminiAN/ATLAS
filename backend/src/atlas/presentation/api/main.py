@@ -8,10 +8,13 @@ import structlog
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from atlas.application.ai.handler import make_ai_explanation_handler
 from atlas.application.container import build_container
 from atlas.application.execution.handler import make_execution_decision_handler
 from atlas.application.journal.handler import make_journal_decision_handler
+from atlas.application.journal.trade_handler import make_journal_trade_handler
 from atlas.application.market_context.handler import make_bar_context_handler
+from atlas.application.position_management.handler import make_position_management_bar_handler
 from atlas.application.market_data.stream import run_mock_market_data_stream
 from atlas.application.news.sync import run_news_calendar_sync
 from atlas.application.pipeline.handler import make_pipeline_bar_handler
@@ -24,6 +27,7 @@ from atlas.presentation.api.routers import (
     analytics,
     backtest,
     decisions,
+    explanations,
     health,
     instruments,
     journal,
@@ -54,11 +58,26 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     ws_manager = WebSocketManager()
     app.state.ws_manager = ws_manager
     container.event_bus.subscribe("market_data.bar.received", ws_manager.on_bar_received)
+    container.event_bus.subscribe("trade.sl_moved", ws_manager.on_trade_event)
+    container.event_bus.subscribe("trade.partial_closed", ws_manager.on_trade_event)
+    container.event_bus.subscribe("trade.closed", ws_manager.on_trade_event)
     container.event_bus.subscribe("decision.emitted", ws_manager.on_decision_emitted)
     container.event_bus.subscribe(
         "decision.emitted",
         make_journal_decision_handler(container),
     )
+    container.event_bus.subscribe(
+        "decision.emitted",
+        make_ai_explanation_handler(container, settings),
+    )
+    for trade_event in (
+        "trade.opened",
+        "trade.rejected",
+        "trade.sl_moved",
+        "trade.partial_closed",
+        "trade.closed",
+    ):
+        container.event_bus.subscribe(trade_event, make_journal_trade_handler(container))
     if settings.execution_enabled:
         container.event_bus.subscribe(
             "decision.emitted",
@@ -71,6 +90,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     container.event_bus.subscribe(
         "market_data.bar.received",
         make_pipeline_bar_handler(container, settings),
+    )
+    container.event_bus.subscribe(
+        "market_data.bar.received",
+        make_position_management_bar_handler(container, settings),
     )
 
     mock_task: asyncio.Task | None = None
@@ -130,6 +153,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(news.router, prefix=settings.api_prefix)
     app.include_router(analysis.router, prefix=settings.api_prefix)
     app.include_router(decisions.router, prefix=settings.api_prefix)
+    app.include_router(explanations.router, prefix=settings.api_prefix)
     app.include_router(journal.router, prefix=settings.api_prefix)
     app.include_router(backtest.router, prefix=settings.api_prefix)
     app.include_router(analytics.router, prefix=settings.api_prefix)

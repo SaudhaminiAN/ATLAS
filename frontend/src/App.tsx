@@ -4,11 +4,15 @@ import { SummaryCards } from "./components/layout/SummaryCards";
 import { AnalysisTabs } from "./components/layout/AnalysisTabs";
 import { ChartPanel } from "./components/chart/ChartPanel";
 import { DecisionHistory } from "./components/decision/DecisionHistory";
+import { ExplanationPanel } from "./components/decision/ExplanationPanel";
+import { TradesPanel } from "./components/trades/TradesPanel";
 import { AnalyticsPanel } from "./components/analytics/AnalyticsPanel";
 import { useAnalysis } from "./hooks/useAnalysis";
 import { useAnalytics } from "./hooks/useAnalytics";
 import { useBars } from "./hooks/useBars";
 import { useDecisionHistory } from "./hooks/useDecisionHistory";
+import { useExplanation } from "./hooks/useExplanation";
+import { useTrades } from "./hooks/useTrades";
 import { useWebSocket } from "./hooks/useWebSocket";
 import { SYMBOL } from "./lib/api";
 import type { DecisionWsPayload } from "./types/api";
@@ -19,13 +23,17 @@ export default function App() {
   const analysis = useAnalysis(SYMBOL);
   const history = useDecisionHistory(SYMBOL);
   const analytics = useAnalytics(SYMBOL);
+  const explanation = useExplanation(analysis.decision?.id);
+  const trades = useTrades(SYMBOL);
 
   const onDecision = useCallback(() => {
     void analysis.refresh();
     void history.reload();
     void analytics.refresh();
+    void explanation.reload();
+    void trades.refresh();
     void reload();
-  }, [analysis, history, analytics, reload]);
+  }, [analysis, history, analytics, explanation, trades, reload]);
 
   const { status: decisionWsStatus } = useWebSocket<DecisionWsPayload>({
     channel: `decisions.${SYMBOL}`,
@@ -62,6 +70,15 @@ export default function App() {
 
         <SummaryCards bars={bars} decision={analysis.decision} loading={analysis.loading} />
 
+        <ExplanationPanel
+          decisionId={analysis.decision?.id ?? null}
+          explanation={explanation.explanation}
+          loading={explanation.loading}
+          generating={explanation.generating}
+          error={explanation.error}
+          onGenerate={() => void explanation.generate()}
+        />
+
         <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
           <div className="xl:col-span-2">
             <ChartPanel bars={bars} loading={barsLoading} />
@@ -81,6 +98,15 @@ export default function App() {
           items={history.history?.items ?? []}
           loading={history.loading}
           total={history.history?.total ?? 0}
+        />
+
+        <TradesPanel
+          trades={trades.trades}
+          loading={trades.loading}
+          error={trades.error}
+          openCount={trades.openCount}
+          closedPnl={trades.closedPnl}
+          onRefresh={() => void trades.refresh()}
         />
 
         <AnalyticsPanel

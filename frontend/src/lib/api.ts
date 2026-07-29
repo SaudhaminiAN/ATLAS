@@ -27,6 +27,38 @@ export async function apiGet<T>(path: string): Promise<T> {
   return body.data;
 }
 
+/** GET that returns null when the API responds with success: false (e.g. NOT_FOUND). */
+export async function apiGetOptional<T>(path: string): Promise<T | null> {
+  const response = await fetch(`${API_BASE}${path}`);
+  if (!response.ok) {
+    throw new ApiClientError(`HTTP ${response.status}`, "HTTP_ERROR");
+  }
+  const body = (await response.json()) as ApiEnvelope<T>;
+  if (!body.success || body.data === null) {
+    return null;
+  }
+  return body.data;
+}
+
+export async function apiPost<T>(path: string): Promise<T> {
+  const response = await fetch(`${API_BASE}${path}`, { method: "POST" });
+  if (!response.ok) {
+    const body = (await response.json().catch(() => null)) as ApiEnvelope<T> | null;
+    throw new ApiClientError(
+      body?.error?.message ?? `HTTP ${response.status}`,
+      body?.error?.code ?? "HTTP_ERROR",
+    );
+  }
+  const body = (await response.json()) as ApiEnvelope<T>;
+  if (!body.success || body.data === null) {
+    throw new ApiClientError(
+      body.error?.message ?? "Request failed",
+      body.error?.code ?? "API_ERROR",
+    );
+  }
+  return body.data;
+}
+
 export const SYMBOL = "XAUUSD";
 export const TIMEFRAME = "M15";
 
@@ -48,4 +80,7 @@ export const endpoints = {
     `/api/v1/analytics/module-accuracy?symbol=${symbol}`,
   analyticsPerformance: (symbol: string) =>
     `/api/v1/analytics/performance?symbol=${symbol}`,
+  explanation: (decisionId: string) => `/api/v1/explanations/${decisionId}`,
+  trades: (symbol: string, limit = 20) =>
+    `/api/v1/trades?symbol=${symbol}&limit=${limit}`,
 } as const;

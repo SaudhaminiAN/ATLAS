@@ -164,6 +164,17 @@ class TradeModel(Base):
     execution_mode: Mapped[str] = mapped_column(String(16), nullable=False)
     rejection_reason: Mapped[str | None] = mapped_column(String(512), nullable=True)
     realized_pnl: Mapped[float | None] = mapped_column(Numeric(18, 6), nullable=True)
+    initial_stop_loss: Mapped[float | None] = mapped_column(Numeric(18, 6), nullable=True)
+    remaining_size: Mapped[float | None] = mapped_column(Numeric(18, 4), nullable=True)
+    partial_realized_pnl: Mapped[float] = mapped_column(
+        Numeric(18, 6), nullable=False, server_default="0"
+    )
+    breakeven_applied: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default="false"
+    )
+    partial_exit_applied: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default="false"
+    )
     opened_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     closed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
@@ -179,6 +190,25 @@ class TradeEventModel(Base):
     )
     event_type: Mapped[str] = mapped_column(String(32), nullable=False)
     payload: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC), nullable=False
+    )
+
+
+class JournalEntryModel(Base):
+    """Trader notes attached to decisions or trades (Spec 13)."""
+
+    __tablename__ = "journal_entries"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
+    decision_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    trade_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("trades.id"), nullable=True
+    )
+    user_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    entry_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    tags: Mapped[list] = mapped_column(JSONB, nullable=False, server_default="[]")
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(UTC), nullable=False
     )
@@ -205,6 +235,22 @@ class DecisionModel(Base):
     validation_result: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     risk_snapshot: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     news_status: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC), nullable=False
+    )
+
+
+class DecisionExplanationModel(Base):
+    """Natural-language explanation for a decision (Spec 15)."""
+
+    __tablename__ = "decision_explanations"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
+    decision_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("decisions.id"), unique=True, nullable=False
+    )
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    provider: Mapped[str] = mapped_column(String(32), nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(UTC), nullable=False
     )

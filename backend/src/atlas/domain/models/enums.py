@@ -54,3 +54,11 @@ class SpreadStatus(StrEnum):
 
     NORMAL = "normal"
     ELEVATED = "elevated"
+
+
+class Trend(StrEnum):
+    """Structural trend classification."""
+
+    UPTREND = "uptrend"
+    DOWNTREND = "downtrend"
+    RANGING = "ranging"

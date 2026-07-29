@@ -45,6 +45,9 @@ def app(test_settings: Settings):
         strategy_engine=MagicMock(),
         news_filter=MagicMock(),
         market_context_service=MagicMock(),
+        mtf_service=MagicMock(),
+        technical_analysis_service=MagicMock(),
+        smc_service=MagicMock(),
     )
     application.state.container = container
     application.state.ws_manager = MagicMock()

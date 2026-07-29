@@ -56,6 +56,24 @@ class Settings(BaseSettings):
     market_context_atr_percentile_lookback: int = 100
     market_context_min_bars_required: int = 100
 
+    mtf_alignment_threshold: float = 0.75
+    mtf_bias_source: str = "smc_trend"
+    mtf_min_bars: int = 50
+    mtf_bar_lookback: int = 120
+
+    technical_swing_lookback: int = 2
+    technical_merge_tolerance_pct: float = 0.001
+    technical_min_bars: int = 200
+    technical_bar_lookback: int = 250
+
+    smc_swing_lookback: int = 2
+    smc_displacement_atr_multiplier: float = 1.5
+    smc_ob_mitigation_pct: float = 0.50
+    smc_equal_level_tolerance_pct: float = 0.001
+    smc_fvg_fill_pct: float = 0.50
+    smc_min_bars: int = 50
+    smc_bar_lookback: int = 120
+
 
 @lru_cache
 def get_settings() -> Settings:

@@ -8,9 +8,12 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from atlas.application.market_context.service import MarketContextConfig, MarketContextService
 from atlas.application.market_data.service import MarketDataConfig, MarketDataService
+from atlas.application.mtf.service import MTFConfig, MultiTimeframeAnalysisService
 from atlas.application.news.service import NewsFilterService
 from atlas.application.pipeline.orchestrator import AnalysisPipelineOrchestrator
+from atlas.application.smc.service import SmartMoneyConceptsService, SMCConfig
 from atlas.application.strategy.service import StrategyEngineService
+from atlas.application.technical.service import TechnicalAnalysisConfig, TechnicalAnalysisService
 from atlas.domain.models.enums import Timeframe
 from atlas.domain.ports.event_bus import EventBusProtocol
 from atlas.domain.services.news_window import NewsFilterConfig
@@ -42,6 +45,9 @@ class Container:
     strategy_engine: StrategyEngineService
     news_filter: NewsFilterService
     market_context_service: MarketContextService
+    mtf_service: MultiTimeframeAnalysisService
+    technical_analysis_service: TechnicalAnalysisService
+    smc_service: SmartMoneyConceptsService
 
 
 def build_container(settings: Settings, engine: AsyncEngine, redis: Redis) -> Container:
@@ -80,6 +86,49 @@ def build_container(settings: Settings, engine: AsyncEngine, redis: Redis) -> Co
         ),
     )
 
+    strategy_engine = StrategyEngineService(
+        session_factory=session_factory,
+        event_bus=event_bus,
+        profile_cache=profile_cache,
+    )
+
+    mtf_service = MultiTimeframeAnalysisService(
+        market_data_service=market_data_service,
+        strategy_engine=strategy_engine,
+        event_bus=event_bus,
+        config=MTFConfig(
+            alignment_threshold=Decimal(str(settings.mtf_alignment_threshold)),
+            bias_source=settings.mtf_bias_source,
+            min_bars=settings.mtf_min_bars,
+            bar_lookback=settings.mtf_bar_lookback,
+        ),
+    )
+
+    technical_analysis_service = TechnicalAnalysisService(
+        market_data_service=market_data_service,
+        event_bus=event_bus,
+        config=TechnicalAnalysisConfig(
+            swing_lookback=settings.technical_swing_lookback,
+            merge_tolerance_pct=Decimal(str(settings.technical_merge_tolerance_pct)),
+            min_bars=settings.technical_min_bars,
+            bar_lookback=settings.technical_bar_lookback,
+        ),
+    )
+
+    smc_service = SmartMoneyConceptsService(
+        market_data_service=market_data_service,
+        event_bus=event_bus,
+        config=SMCConfig(
+            swing_lookback=settings.smc_swing_lookback,
+            displacement_atr_multiplier=Decimal(str(settings.smc_displacement_atr_multiplier)),
+            ob_mitigation_pct=Decimal(str(settings.smc_ob_mitigation_pct)),
+            equal_level_tolerance_pct=Decimal(str(settings.smc_equal_level_tolerance_pct)),
+            fvg_fill_pct=Decimal(str(settings.smc_fvg_fill_pct)),
+            min_bars=settings.smc_min_bars,
+            bar_lookback=settings.smc_bar_lookback,
+        ),
+    )
+
     return Container(
         settings=settings,
         event_bus=event_bus,
@@ -96,11 +145,7 @@ def build_container(settings: Settings, engine: AsyncEngine, redis: Redis) -> Co
             interval_seconds=settings.market_data_mock_interval_seconds,
         ),
         bar_cache=bar_cache,
-        strategy_engine=StrategyEngineService(
-            session_factory=session_factory,
-            event_bus=event_bus,
-            profile_cache=profile_cache,
-        ),
+        strategy_engine=strategy_engine,
         news_filter=NewsFilterService(
             session_factory=session_factory,
             event_bus=event_bus,
@@ -116,4 +161,7 @@ def build_container(settings: Settings, engine: AsyncEngine, redis: Redis) -> Co
             stale_warning_minutes=settings.news_calendar_stale_warning_minutes,
         ),
         market_context_service=market_context_service,
+        mtf_service=mtf_service,
+        technical_analysis_service=technical_analysis_service,
+        smc_service=smc_service,
     )

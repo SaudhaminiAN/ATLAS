@@ -60,6 +60,9 @@ def app():
         strategy_engine=strategy_engine,
         news_filter=MagicMock(),
         market_context_service=MagicMock(),
+        mtf_service=MagicMock(),
+        technical_analysis_service=MagicMock(),
+        smc_service=MagicMock(),
     )
     application.state.ws_manager = MagicMock()
     return application

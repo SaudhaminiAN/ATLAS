@@ -74,6 +74,10 @@ def app():
         trade_validation_service=MagicMock(),
         decision_engine=decision_engine,
         journal_service=MagicMock(),
+        backtest_runner=MagicMock(),
+        analytics_service=MagicMock(),
+        risk_management_service=MagicMock(),
+        execution_service=MagicMock(),
     )
     application.state.ws_manager = MagicMock()
     return application

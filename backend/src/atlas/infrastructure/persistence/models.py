@@ -129,6 +129,61 @@ class PipelineRunModel(Base):
     )
 
 
+class RiskProfileModel(Base):
+    """Account risk profile configuration."""
+
+    __tablename__ = "risk_profiles"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    config: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
+        nullable=False,
+    )
+
+
+class TradeModel(Base):
+    """Executed or rejected trade record."""
+
+    __tablename__ = "trades"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
+    decision_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), unique=True, nullable=False)
+    instrument_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("instruments.id"), nullable=False
+    )
+    direction: Mapped[str] = mapped_column(String(8), nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False)
+    entry_price: Mapped[float] = mapped_column(Numeric(18, 6), nullable=False)
+    fill_price: Mapped[float | None] = mapped_column(Numeric(18, 6), nullable=True)
+    stop_loss: Mapped[float] = mapped_column(Numeric(18, 6), nullable=False)
+    take_profit: Mapped[float] = mapped_column(Numeric(18, 6), nullable=False)
+    position_size: Mapped[float] = mapped_column(Numeric(18, 4), nullable=False)
+    execution_mode: Mapped[str] = mapped_column(String(16), nullable=False)
+    rejection_reason: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    realized_pnl: Mapped[float | None] = mapped_column(Numeric(18, 6), nullable=True)
+    opened_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    closed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class TradeEventModel(Base):
+    """Append-only trade lifecycle audit."""
+
+    __tablename__ = "trade_events"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
+    trade_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("trades.id"), nullable=False
+    )
+    event_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    payload: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC), nullable=False
+    )
+
+
 class DecisionModel(Base):
     """Immutable trading decision record."""
 

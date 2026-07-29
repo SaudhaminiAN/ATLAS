@@ -1,85 +1,97 @@
-import { useEffect, useState } from "react";
-
-const API_URL = import.meta.env.VITE_API_URL ?? "http://localhost:8000";
-
-interface HealthResponse {
-  success: boolean;
-  data: { status: string };
-}
+import { DemoBanner } from "./components/layout/DemoBanner";
+import { Header } from "./components/layout/Header";
+import { SummaryCards } from "./components/layout/SummaryCards";
+import { AnalysisTabs } from "./components/layout/AnalysisTabs";
+import { ChartPanel } from "./components/chart/ChartPanel";
+import { DecisionHistory } from "./components/decision/DecisionHistory";
+import { AnalyticsPanel } from "./components/analytics/AnalyticsPanel";
+import { useAnalysis } from "./hooks/useAnalysis";
+import { useAnalytics } from "./hooks/useAnalytics";
+import { useBars } from "./hooks/useBars";
+import { useDecisionHistory } from "./hooks/useDecisionHistory";
+import { useWebSocket } from "./hooks/useWebSocket";
+import { SYMBOL } from "./lib/api";
+import type { DecisionWsPayload } from "./types/api";
+import { useCallback } from "react";
 
 export default function App() {
-  const [apiStatus, setApiStatus] = useState<"loading" | "ok" | "error">("loading");
+  const { bars, loading: barsLoading, wsStatus: barWsStatus, reload } = useBars(SYMBOL);
+  const analysis = useAnalysis(SYMBOL);
+  const history = useDecisionHistory(SYMBOL);
+  const analytics = useAnalytics(SYMBOL);
 
-  useEffect(() => {
-    fetch(`${API_URL}/api/v1/health`)
-      .then((res) => res.json())
-      .then((body: HealthResponse) => {
-        setApiStatus(body.success && body.data.status === "ok" ? "ok" : "error");
-      })
-      .catch(() => setApiStatus("error"));
-  }, []);
+  const onDecision = useCallback(() => {
+    void analysis.refresh();
+    void history.reload();
+    void analytics.refresh();
+    void reload();
+  }, [analysis, history, analytics, reload]);
+
+  const { status: decisionWsStatus } = useWebSocket<DecisionWsPayload>({
+    channel: `decisions.${SYMBOL}`,
+    onMessage: onDecision,
+  });
+
+  const wsStatus =
+    barWsStatus === "connected" || decisionWsStatus === "connected"
+      ? "connected"
+      : barWsStatus === "connecting" || decisionWsStatus === "connecting"
+        ? "connecting"
+        : barWsStatus === "error" || decisionWsStatus === "error"
+          ? "error"
+          : "disconnected";
 
   return (
-    <div className="min-h-screen flex flex-col">
-      <header className="border-b border-gray-800 px-6 py-4">
-        <div className="flex items-center gap-3">
-          <span className="text-atlas-gold text-2xl font-bold tracking-wide">ATLAS</span>
-          <span className="text-gray-500 text-sm">XAUUSD Analysis Platform</span>
-        </div>
-      </header>
+    <div className="min-h-screen bg-zinc-950 text-zinc-100">
+      <DemoBanner />
+      <Header
+        wsStatus={wsStatus}
+        session={analysis.context?.primary_session}
+        newsBlocked={analysis.news?.is_blocked}
+      />
 
-      <main className="flex-1 flex items-center justify-center p-8">
-        <div className="bg-atlas-panel rounded-xl p-8 max-w-lg w-full shadow-xl border border-gray-800">
-          <h1 className="text-xl font-semibold mb-2">Project Setup Complete</h1>
-          <p className="text-gray-400 mb-6">
-            Foundation scaffold is running. Analysis modules will be added in subsequent specs.
-          </p>
+      <main className="max-w-[1600px] mx-auto px-4 sm:px-6 py-6 space-y-6">
+        {analysis.error && (
+          <div className="rounded-lg border border-red-500/40 bg-red-500/10 px-4 py-3 text-sm text-red-300 flex justify-between">
+            <span>Could not load analysis: {analysis.error}</span>
+            <button type="button" className="underline" onClick={() => void analysis.refresh()}>
+              Retry
+            </button>
+          </div>
+        )}
 
-          <div className="space-y-3 text-sm">
-            <StatusRow label="Frontend" status="ok" detail="React + TypeScript + Tailwind" />
-            <StatusRow
-              label="API"
-              status={apiStatus}
-              detail={
-                apiStatus === "loading"
-                  ? "Checking..."
-                  : apiStatus === "ok"
-                    ? "Connected to backend"
-                    : "Backend unreachable"
-              }
+        <SummaryCards bars={bars} decision={analysis.decision} loading={analysis.loading} />
+
+        <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
+          <div className="xl:col-span-2">
+            <ChartPanel bars={bars} loading={barsLoading} />
+          </div>
+          <div>
+            <AnalysisTabs
+              confluence={analysis.confluence}
+              validation={analysis.validation}
+              context={analysis.context}
+              mtf={analysis.mtf}
+              news={analysis.news}
             />
-            <StatusRow label="Instrument" status="ok" detail="XAUUSD (Gold)" />
-            <StatusRow label="Default decision" status="ok" detail="WAIT" />
           </div>
         </div>
+
+        <DecisionHistory
+          items={history.history?.items ?? []}
+          loading={history.loading}
+          total={history.history?.total ?? 0}
+        />
+
+        <AnalyticsPanel
+          decisionStats={analytics.decisionStats}
+          moduleAccuracy={analytics.moduleAccuracy}
+          performance={analytics.performance}
+          loading={analytics.loading}
+          error={analytics.error}
+          onRefresh={() => void analytics.refresh()}
+        />
       </main>
-    </div>
-  );
-}
-
-function StatusRow({
-  label,
-  status,
-  detail,
-}: {
-  label: string;
-  status: "loading" | "ok" | "error";
-  detail: string;
-}) {
-  const dot =
-    status === "loading"
-      ? "bg-yellow-500 animate-pulse"
-      : status === "ok"
-        ? "bg-green-500"
-        : "bg-red-500";
-
-  return (
-    <div className="flex items-center justify-between py-2 border-b border-gray-800 last:border-0">
-      <div className="flex items-center gap-2">
-        <span className={`w-2 h-2 rounded-full ${dot}`} />
-        <span className="text-gray-300">{label}</span>
-      </div>
-      <span className="text-gray-500">{detail}</span>
     </div>
   );
 }

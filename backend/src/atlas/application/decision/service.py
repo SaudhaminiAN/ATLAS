@@ -100,13 +100,22 @@ class DecisionEngineService:
             news_status=news_status,
         )
 
-    async def emit(self, decision: TradingDecision) -> None:
-        """Publish event, persist to DB, and update cache."""
-        self._publish_decision(decision)
+    async def emit(
+        self,
+        decision: TradingDecision,
+        *,
+        persist: bool = True,
+        publish: bool = True,
+    ) -> None:
+        """Publish event, optionally persist to DB and update cache."""
+        if publish:
+            self._publish_decision(decision)
+        if not persist:
+            return
         try:
             if self.session_factory is not None:
                 async with self.session_factory() as session:
-                    await DecisionRepository(session).insert(decision)
+                    await DecisionRepository(session).insert_idempotent(decision)
             if self.decision_cache is not None:
                 await self.decision_cache.set_latest(decision)
         except Exception:

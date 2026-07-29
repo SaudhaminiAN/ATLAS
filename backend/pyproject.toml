@@ -17,6 +17,9 @@ dependencies = [
     "httpx>=0.28.0",
 ]
 
+[project.scripts]
+atlas-backtest = "atlas.presentation.cli.backtest:main"
+
 [project.optional-dependencies]
 dev = [
     "pytest>=8.3.0",

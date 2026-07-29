@@ -196,6 +196,7 @@ async def test_emit_publishes_event_and_persists() -> None:
     session = MagicMock()
     session.add = MagicMock()
     session.commit = AsyncMock()
+    session.execute = AsyncMock(return_value=MagicMock(rowcount=1))
     session_factory = MagicMock()
     session_factory.return_value.__aenter__ = AsyncMock(return_value=session)
     session_factory.return_value.__aexit__ = AsyncMock(return_value=None)

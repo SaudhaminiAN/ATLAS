@@ -6,8 +6,11 @@ from decimal import Decimal
 from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
+from atlas.application.analytics.service import AnalyticsService
+from atlas.application.backtesting.runner import BacktestRunner
 from atlas.application.confluence.service import ConfluenceConfig, ConfluenceService
 from atlas.application.decision.service import DecisionEngineService
+from atlas.application.execution.service import ExecutionService
 from atlas.application.journal.service import JournalService
 from atlas.application.market_context.service import MarketContextConfig, MarketContextService
 from atlas.application.market_data.service import MarketDataConfig, MarketDataService
@@ -16,6 +19,7 @@ from atlas.application.news.service import NewsFilterService
 from atlas.application.pipeline.orchestrator import AnalysisPipelineOrchestrator, PipelineConfig
 from atlas.application.price_action.service import PriceActionConfig, PriceActionService
 from atlas.application.smc.service import SmartMoneyConceptsService, SMCConfig
+from atlas.application.risk.service import RiskManagementService
 from atlas.application.strategy.service import StrategyEngineService
 from atlas.application.technical.service import TechnicalAnalysisConfig, TechnicalAnalysisService
 from atlas.application.validation.service import TradeValidationConfig, TradeValidationService
@@ -25,11 +29,13 @@ from atlas.domain.services.news_window import NewsFilterConfig
 from atlas.infrastructure.cache.bar_cache import BarCache
 from atlas.infrastructure.cache.context_cache import ContextCache
 from atlas.infrastructure.cache.decision_cache import DecisionCache
+from atlas.infrastructure.cache.execution_idempotency import ExecutionIdempotencyCache
 from atlas.infrastructure.cache.news_cache import NewsEventCache
 from atlas.infrastructure.cache.pipeline_dedupe import PipelineDedupeCache
 from atlas.infrastructure.cache.strategy_cache import StrategyProfileCache
 from atlas.infrastructure.config import Settings
 from atlas.infrastructure.events.in_memory_bus import InMemoryEventBus
+from atlas.infrastructure.execution.paper_provider import PaperExecutionProvider
 from atlas.infrastructure.market_data.mock_provider import MockMarketDataProvider
 from atlas.infrastructure.market_data.replay import DatabaseMarketDataReplay
 from atlas.infrastructure.news.mock_provider import MockNewsCalendarProvider
@@ -60,6 +66,10 @@ class Container:
     trade_validation_service: TradeValidationService
     decision_engine: DecisionEngineService
     journal_service: JournalService
+    backtest_runner: BacktestRunner
+    analytics_service: AnalyticsService
+    risk_management_service: RiskManagementService
+    execution_service: ExecutionService
 
 
 def build_container(settings: Settings, engine: AsyncEngine, redis: Redis) -> Container:
@@ -208,6 +218,21 @@ def build_container(settings: Settings, engine: AsyncEngine, redis: Redis) -> Co
         decision_cache=DecisionCache(redis),
     )
     journal_service = JournalService(session_factory=session_factory)
+    analytics_service = AnalyticsService(session_factory=session_factory)
+    risk_management_service = RiskManagementService(
+        session_factory=session_factory,
+        event_bus=event_bus,
+    )
+    execution_idempotency = ExecutionIdempotencyCache(redis)
+    execution_service = ExecutionService(
+        session_factory=session_factory,
+        provider=PaperExecutionProvider(
+            slippage_pips=Decimal(str(settings.execution_paper_slippage_pips)),
+        ),
+        idempotency_cache=execution_idempotency,
+        event_bus=event_bus,
+        execution_mode=settings.execution_mode,
+    )
     dedupe_cache = PipelineDedupeCache(
         redis,
         ttl_seconds=settings.pipeline_dedupe_window_seconds,
@@ -225,6 +250,7 @@ def build_container(settings: Settings, engine: AsyncEngine, redis: Redis) -> Co
         trade_validation_service=trade_validation_service,
         decision_engine=decision_engine,
         strategy_engine=strategy_engine,
+        risk_management_service=risk_management_service,
         dedupe_cache=dedupe_cache,
         event_bus=event_bus,
         session_factory=session_factory,
@@ -236,6 +262,13 @@ def build_container(settings: Settings, engine: AsyncEngine, redis: Redis) -> Co
         ),
     )
 
+    market_data_replay = DatabaseMarketDataReplay(session_factory)
+    backtest_runner = BacktestRunner(
+        pipeline=pipeline,
+        market_data_service=market_data_service,
+        market_data_replay=market_data_replay,
+    )
+
     return Container(
         settings=settings,
         event_bus=event_bus,
@@ -244,7 +277,7 @@ def build_container(settings: Settings, engine: AsyncEngine, redis: Redis) -> Co
         redis=redis,
         pipeline=pipeline,
         market_data_service=market_data_service,
-        market_data_replay=DatabaseMarketDataReplay(session_factory),
+        market_data_replay=market_data_replay,
         mock_provider=MockMarketDataProvider(
             interval_seconds=settings.market_data_mock_interval_seconds,
         ),
@@ -260,4 +293,8 @@ def build_container(settings: Settings, engine: AsyncEngine, redis: Redis) -> Co
         trade_validation_service=trade_validation_service,
         decision_engine=decision_engine,
         journal_service=journal_service,
+        backtest_runner=backtest_runner,
+        analytics_service=analytics_service,
+        risk_management_service=risk_management_service,
+        execution_service=execution_service,
     )

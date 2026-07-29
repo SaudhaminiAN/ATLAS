@@ -2,7 +2,47 @@
 @tailwind components;
 @tailwind utilities;
 
-body {
-  margin: 0;
-  font-family: Inter, system-ui, -apple-system, sans-serif;
+@layer base {
+  body {
+    margin: 0;
+    min-height: 100vh;
+    background-color: #030304;
+  }
+
+  ::selection {
+    background: rgba(232, 197, 71, 0.3);
+    color: #fff;
+  }
+
+  ::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    background: #22222c;
+    border-radius: 3px;
+  }
+
+  ::-webkit-scrollbar-thumb:hover {
+    background: #33333f;
+  }
+}
+
+@layer utilities {
+  .glass-panel {
+    @apply bg-panel/80 backdrop-blur-xl border border-border/80 shadow-panel;
+  }
+
+  .text-gradient-gold {
+    @apply bg-gradient-to-r from-gold via-gold-glow to-gold bg-clip-text text-transparent;
+  }
+
+  .skeleton {
+    @apply animate-pulse rounded bg-elevated;
+  }
 }

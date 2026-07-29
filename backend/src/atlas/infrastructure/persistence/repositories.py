@@ -4,7 +4,7 @@ from datetime import datetime
 from decimal import Decimal
 from uuid import UUID
 
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -30,6 +30,7 @@ from atlas.infrastructure.persistence.models import (
     InstrumentModel,
     OHLCVBarModel,
     PipelineRunModel,
+    RiskProfileModel,
     StrategyProfileModel,
 )
 
@@ -113,6 +114,29 @@ class OHLCVBarRepository:
         result = await self._session.execute(stmt)
         await self._session.commit()
         return result.rowcount > 0
+
+    async def count(self, instrument_id: UUID, timeframe: Timeframe) -> int:
+        """Count bars for instrument/timeframe."""
+        result = await self._session.execute(
+            select(func.count())
+            .select_from(OHLCVBarModel)
+            .where(
+                OHLCVBarModel.instrument_id == instrument_id,
+                OHLCVBarModel.timeframe == timeframe.value,
+            )
+        )
+        return int(result.scalar_one())
+
+    async def delete_for_instrument(self, instrument_id: UUID, timeframe: Timeframe) -> int:
+        """Remove all bars for instrument/timeframe (mock bootstrap only)."""
+        result = await self._session.execute(
+            delete(OHLCVBarModel).where(
+                OHLCVBarModel.instrument_id == instrument_id,
+                OHLCVBarModel.timeframe == timeframe.value,
+            )
+        )
+        await self._session.commit()
+        return result.rowcount or 0
 
     async def exists(
         self, instrument_id: UUID, timeframe: Timeframe, open_time: datetime
@@ -546,3 +570,51 @@ class DecisionRepository:
             _decision_model_to_domain(decision_model, instrument_to_domain(instrument_model))
             for decision_model, instrument_model in result.all()
         ]
+
+
+class RiskProfileRepository:
+    """Risk profile persistence (Spec 10)."""
+
+    DEFAULT_ID = "default"
+
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
+
+    async def get(self, profile_id: str = DEFAULT_ID):
+        from atlas.infrastructure.persistence.risk_serializers import risk_profile_from_dict
+
+        result = await self._session.execute(
+            select(RiskProfileModel).where(RiskProfileModel.id == profile_id)
+        )
+        row = result.scalar_one_or_none()
+        if row is None:
+            return None
+        data = dict(row.config)
+        data["id"] = row.id
+        data["updated_at"] = row.updated_at
+        return risk_profile_from_dict(data)
+
+    async def update(self, profile):
+        from datetime import UTC, datetime
+
+        from atlas.infrastructure.persistence.risk_serializers import (
+            risk_profile_from_dict,
+            risk_profile_to_dict,
+        )
+
+        values = risk_profile_to_dict(profile)
+        profile_id = values.pop("id")
+        result = await self._session.execute(
+            select(RiskProfileModel).where(RiskProfileModel.id == profile_id)
+        )
+        row = result.scalar_one_or_none()
+        if row is None:
+            raise ValueError(f"Risk profile not found: {profile_id}")
+        row.config = values
+        row.updated_at = datetime.now(UTC)
+        await self._session.commit()
+        await self._session.refresh(row)
+        data = dict(row.config)
+        data["id"] = row.id
+        data["updated_at"] = row.updated_at
+        return risk_profile_from_dict(data)

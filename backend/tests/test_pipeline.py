@@ -211,6 +211,7 @@ def pipeline_orchestrator():
         trade_validation_service=validation_service,
         decision_engine=decision_engine,
         strategy_engine=strategy_engine,
+        risk_management_service=MagicMock(),
         dedupe_cache=dedupe,
         event_bus=bus,
         config=PipelineConfig(risk_enabled=False),

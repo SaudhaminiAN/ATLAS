@@ -9,7 +9,7 @@ from decimal import Decimal
 from atlas.domain.models.enums import Timeframe
 from atlas.domain.models.instrument import Instrument
 from atlas.domain.models.ohlcv import OHLCVBar
-from atlas.domain.services.bar_validation import TIMEFRAME_MINUTES, is_aligned_open_time, to_utc
+from atlas.domain.services.bar_validation import TIMEFRAME_MINUTES, to_utc
 
 
 class MockMarketDataProvider:
@@ -34,14 +34,13 @@ class MockMarketDataProvider:
         """Generate historical bars between start and end."""
         bars: list[OHLCVBar] = []
         minutes = TIMEFRAME_MINUTES[timeframe]
-        current = to_utc(start)
-        end_utc = to_utc(end)
+        current = self._align_to_timeframe(start, timeframe)
+        end_utc = self._align_to_timeframe(end, timeframe)
         price = self._base_price
 
         while current <= end_utc:
-            if is_aligned_open_time(current, timeframe):
-                bar, price = self._make_bar(instrument, timeframe, current, price)
-                bars.append(bar)
+            bar, price = self._make_bar(instrument, timeframe, current, price)
+            bars.append(bar)
             current += timedelta(minutes=minutes)
 
         return bars

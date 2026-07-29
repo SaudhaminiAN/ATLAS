@@ -84,6 +84,10 @@ class Settings(BaseSettings):
 
     confluence_min_evidence_count: int = 3
 
+    execution_enabled: bool = True
+    execution_mode: str = "paper"
+    execution_paper_slippage_pips: float = 0.5
+
 
 @lru_cache
 def get_settings() -> Settings:

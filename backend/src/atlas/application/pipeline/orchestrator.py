@@ -3,7 +3,7 @@
 import asyncio
 import time
 from collections.abc import AsyncIterator
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from typing import Any
 from uuid import uuid4
@@ -18,13 +18,15 @@ from atlas.application.market_data.service import MarketDataService
 from atlas.application.mtf.service import MultiTimeframeAnalysisService
 from atlas.application.news.service import NewsFilterService
 from atlas.application.price_action.service import PriceActionService
+from atlas.application.risk.service import RiskManagementService
 from atlas.application.smc.service import SmartMoneyConceptsService
 from atlas.application.strategy.service import StrategyEngineService
 from atlas.application.technical.service import TechnicalAnalysisService
 from atlas.application.validation.service import TradeValidationService
 from atlas.domain.events.base import DomainEvent
+from atlas.domain.models.backtest import BacktestConfig
 from atlas.domain.models.decision import TradingDecision, wait_decision
-from atlas.domain.models.enums import Bias, Timeframe, Trend
+from atlas.domain.models.enums import Bias, Direction, Timeframe, Trend
 from atlas.domain.models.instrument import Instrument
 from atlas.domain.models.ohlcv import OHLCVBar
 from atlas.domain.models.pipeline import PipelineRun, PipelineStatus, StageResult
@@ -36,8 +38,19 @@ from atlas.domain.models.validation import ValidationContext
 from atlas.domain.ports.event_bus import EventBusProtocol
 from atlas.infrastructure.cache.pipeline_dedupe import PipelineDedupeCache
 from atlas.infrastructure.persistence.repositories import PipelineRunRepository
+from atlas.infrastructure.persistence.risk_serializers import risk_result_to_dict
 
 logger = structlog.get_logger(__name__)
+
+
+@dataclass(frozen=True, slots=True)
+class ReplayOptions:
+    """Controls side effects when replaying historical bars (Spec 16)."""
+
+    skip_dedupe: bool = True
+    persist_pipeline: bool = False
+    persist_decisions: bool = False
+    publish_events: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -107,6 +120,7 @@ class AnalysisPipelineOrchestrator:
     trade_validation_service: TradeValidationService
     decision_engine: DecisionEngineService
     strategy_engine: StrategyEngineService
+    risk_management_service: RiskManagementService
     dedupe_cache: PipelineDedupeCache
     event_bus: EventBusProtocol
     session_factory: async_sessionmaker[AsyncSession] | None = None
@@ -130,6 +144,8 @@ class AnalysisPipelineOrchestrator:
         instrument: Instrument,
         trigger_bar: OHLCVBar,
         correlation_id: str | None = None,
+        *,
+        replay: ReplayOptions | None = None,
     ) -> PipelineRun:
         """Execute the full analysis pipeline for a closed bar."""
         cid = correlation_id or str(uuid4())
@@ -148,21 +164,22 @@ class AnalysisPipelineOrchestrator:
             run.completed_at = datetime.now(UTC)
             return run
 
-        acquired = await self.dedupe_cache.try_acquire(
-            instrument.symbol,
-            trigger_bar.timeframe,
-            trigger_bar.open_time,
-        )
-        if not acquired:
-            logger.info(
-                "pipeline_dedupe_skip",
-                correlation_id=cid,
-                symbol=instrument.symbol,
-                open_time=trigger_bar.open_time.isoformat(),
+        if replay is None or not replay.skip_dedupe:
+            acquired = await self.dedupe_cache.try_acquire(
+                instrument.symbol,
+                trigger_bar.timeframe,
+                trigger_bar.open_time,
             )
-            run.status = PipelineStatus.SKIPPED
-            run.completed_at = datetime.now(UTC)
-            return run
+            if not acquired:
+                logger.info(
+                    "pipeline_dedupe_skip",
+                    correlation_id=cid,
+                    symbol=instrument.symbol,
+                    open_time=trigger_bar.open_time.isoformat(),
+                )
+                run.status = PipelineStatus.SKIPPED
+                run.completed_at = datetime.now(UTC)
+                return run
 
         logger.info(
             "pipeline_started",
@@ -175,7 +192,12 @@ class AnalysisPipelineOrchestrator:
         strategy = await self.strategy_engine.get_active()
         if not strategy:
             return await self._abort_with_wait(
-                run, instrument, "No active strategy profile", started, strategy_id="unknown"
+                run,
+                instrument,
+                "No active strategy profile",
+                started,
+                strategy_id="unknown",
+                replay=replay,
             )
 
         try:
@@ -186,6 +208,7 @@ class AnalysisPipelineOrchestrator:
                 strategy,
                 as_of=as_of,
                 correlation_id=cid,
+                replay=replay,
             )
         except Exception as exc:
             logger.exception("pipeline_failed", correlation_id=cid)
@@ -196,21 +219,29 @@ class AnalysisPipelineOrchestrator:
                 strategy_id=strategy.id,
                 decided_at=as_of,
             )
-            await self.decision_engine.emit(decision)
+            await self.decision_engine.emit(
+                decision,
+                persist=replay is None or replay.persist_decisions,
+                publish=replay is None or replay.publish_events,
+            )
             run.decision_id = decision.id
             run.status = PipelineStatus.FAILED
             run.completed_at = datetime.now(UTC)
             run.duration_ms = int((run.completed_at - started).total_seconds() * 1000)
-            self._publish_failed(run, str(exc))
-            await self._persist_run(run)
+            if replay is None or replay.publish_events:
+                self._publish_failed(run, str(exc))
+            if replay is None or replay.persist_pipeline:
+                await self._persist_run(run)
             return run
 
         run.decision_id = decision.id
         run.status = PipelineStatus.COMPLETED
         run.completed_at = datetime.now(UTC)
         run.duration_ms = int((run.completed_at - started).total_seconds() * 1000)
-        self._publish_completed(run, decision)
-        await self._persist_run(run)
+        if replay is None or replay.publish_events:
+            self._publish_completed(run, decision)
+        if replay is None or replay.persist_pipeline:
+            await self._persist_run(run)
         logger.info("pipeline_completed", correlation_id=cid, direction=decision.direction.value)
         return run
 
@@ -223,6 +254,7 @@ class AnalysisPipelineOrchestrator:
         *,
         as_of: datetime,
         correlation_id: str,
+        replay: ReplayOptions | None = None,
     ) -> TradingDecision:
         context = await self._run_critical_stage(
             run,
@@ -326,12 +358,37 @@ class AnalysisPipelineOrchestrator:
             ),
         )
 
+        risk_within_limits = None
+        risk_snapshot = None
+
         if self.config.risk_enabled:
-            run.stage_results["risk"] = StageResult(
-                stage_name="risk",
-                status="skipped",
-                error="Risk module not implemented",
-            )
+            if (
+                validation.is_valid
+                and confluence.suggested_direction in (Direction.BUY, Direction.SELL)
+            ):
+                profile = await self.risk_management_service.get_profile()
+                risk_result = await self._run_critical_stage(
+                    run,
+                    "risk",
+                    asyncio.to_thread(
+                        self.risk_management_service.calculate,
+                        confluence.suggested_direction,
+                        trigger_bar.close,
+                        technical,
+                        smc,
+                        context.atr_value,
+                        instrument,
+                        profile,
+                    ),
+                )
+                risk_snapshot = risk_result_to_dict(risk_result)
+                risk_within_limits = risk_result.within_limits
+            else:
+                run.stage_results["risk"] = StageResult(
+                    stage_name="risk",
+                    status="skipped",
+                    error="Not actionable for risk sizing",
+                )
         else:
             run.stage_results["risk"] = StageResult(stage_name="risk", status="skipped")
 
@@ -344,6 +401,9 @@ class AnalysisPipelineOrchestrator:
                 news_status,
                 strategy,
                 correlation_id=correlation_id,
+                replay=replay,
+                risk_within_limits=risk_within_limits,
+                risk_snapshot=risk_snapshot,
             ),
         )
         return decision
@@ -356,6 +416,9 @@ class AnalysisPipelineOrchestrator:
         strategy: StrategyProfile,
         *,
         correlation_id: str,
+        replay: ReplayOptions | None = None,
+        risk_within_limits: bool | None = None,
+        risk_snapshot: dict | None = None,
     ) -> TradingDecision:
         decision = self.decision_engine.resolve(
             confluence,
@@ -363,9 +426,15 @@ class AnalysisPipelineOrchestrator:
             news_status,
             strategy,
             correlation_id=correlation_id,
-            risk_within_limits=None,
+            risk_within_limits=risk_within_limits,
         )
-        await self.decision_engine.emit(decision)
+        if risk_snapshot is not None:
+            decision = replace(decision, risk_snapshot=risk_snapshot)
+        await self.decision_engine.emit(
+            decision,
+            persist=replay is None or replay.persist_decisions,
+            publish=replay is None or replay.publish_events,
+        )
         return decision
 
     async def _analyze_price_action(
@@ -470,6 +539,7 @@ class AnalysisPipelineOrchestrator:
         *,
         stage_name: str = "decision_engine",
         strategy_id: str,
+        replay: ReplayOptions | None = None,
     ) -> PipelineRun:
         run.stage_results[stage_name] = StageResult(
             stage_name=stage_name,
@@ -483,13 +553,19 @@ class AnalysisPipelineOrchestrator:
             strategy_id=strategy_id,
             decided_at=run.trigger_bar_time,
         )
-        await self.decision_engine.emit(decision)
+        await self.decision_engine.emit(
+            decision,
+            persist=replay is None or replay.persist_decisions,
+            publish=replay is None or replay.publish_events,
+        )
         run.decision_id = decision.id
         run.status = PipelineStatus.FAILED
         run.completed_at = datetime.now(UTC)
         run.duration_ms = int((run.completed_at - started).total_seconds() * 1000)
-        self._publish_failed(run, reason)
-        await self._persist_run(run)
+        if replay is None or replay.publish_events:
+            self._publish_failed(run, reason)
+        if replay is None or replay.persist_pipeline:
+            await self._persist_run(run)
         return run
 
     async def _persist_run(self, run: PipelineRun) -> None:
@@ -538,11 +614,42 @@ class AnalysisPipelineOrchestrator:
         self,
         instrument: Instrument,
         bar_iterator: AsyncIterator[OHLCVBar],
+        config: BacktestConfig,
     ) -> list[PipelineRun]:
-        """Replay pipeline over a historical bar iterator (Spec 16 integration)."""
+        """Replay pipeline over a historical bar iterator (Spec 16)."""
+        replay_opts = ReplayOptions(
+            skip_dedupe=True,
+            persist_pipeline=config.persist_pipeline_runs,
+            persist_decisions=config.persist_decisions,
+            publish_events=False,
+        )
+        prior_risk = self.config.risk_enabled
+        if config.risk_enabled != prior_risk:
+            self.config = PipelineConfig(
+                primary_timeframe=self.config.primary_timeframe,
+                risk_enabled=config.risk_enabled,
+                stage_timeout_seconds=self.config.stage_timeout_seconds,
+                dedupe_window_seconds=self.config.dedupe_window_seconds,
+            )
         runs: list[PipelineRun] = []
-        async for bar in bar_iterator:
-            if bar.timeframe != self.config.primary_timeframe:
-                continue
-            runs.append(await self.run(instrument, bar))
+        try:
+            async for bar in bar_iterator:
+                if bar.timeframe != config.timeframe:
+                    continue
+                runs.append(
+                    await self.run(
+                        instrument,
+                        bar,
+                        correlation_id=f"replay-{instrument.symbol}-{bar.open_time.isoformat()}",
+                        replay=replay_opts,
+                    )
+                )
+        finally:
+            if config.risk_enabled != prior_risk:
+                self.config = PipelineConfig(
+                    primary_timeframe=self.config.primary_timeframe,
+                    risk_enabled=prior_risk,
+                    stage_timeout_seconds=self.config.stage_timeout_seconds,
+                    dedupe_window_seconds=self.config.dedupe_window_seconds,
+                )
         return runs

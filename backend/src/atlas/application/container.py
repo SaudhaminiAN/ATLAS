@@ -7,6 +7,7 @@ from uuid import UUID
 from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
+from atlas.application.auth.service import AuthService
 from atlas.application.ai.service import AIExplanationService
 from atlas.application.analytics.service import AnalyticsService
 from atlas.application.backtesting.runner import BacktestRunner
@@ -77,6 +78,7 @@ class Container:
     execution_service: ExecutionService
     position_management_service: PositionManagementService
     ai_explanation_service: AIExplanationService
+    auth_service: AuthService
 
 
 def _build_explanation_provider(settings: Settings):
@@ -318,6 +320,13 @@ def build_container(settings: Settings, engine: AsyncEngine, redis: Redis) -> Co
         max_tokens=settings.ai_explanation_max_tokens,
         enabled=settings.ai_explanation_enabled,
     )
+    auth_service = AuthService(
+        session_factory=session_factory,
+        jwt_secret=settings.jwt_secret,
+        access_expire_minutes=settings.jwt_access_expire_minutes,
+        refresh_expire_days=settings.jwt_refresh_expire_days,
+        registration_enabled=settings.auth_registration_enabled,
+    )
 
     return Container(
         settings=settings,
@@ -349,4 +358,5 @@ def build_container(settings: Settings, engine: AsyncEngine, redis: Redis) -> Co
         execution_service=execution_service,
         position_management_service=position_management_service,
         ai_explanation_service=ai_explanation_service,
+        auth_service=auth_service,
     )

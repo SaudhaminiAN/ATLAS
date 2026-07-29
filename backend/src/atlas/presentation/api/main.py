@@ -22,9 +22,12 @@ from atlas.infrastructure.cache.redis_client import create_redis
 from atlas.infrastructure.config import Settings, get_settings
 from atlas.infrastructure.logging import configure_logging
 from atlas.infrastructure.persistence.database import create_engine
+from atlas.presentation.api.middleware.auth import AuthMiddleware
+from atlas.presentation.api.middleware.rate_limit import RateLimitMiddleware
 from atlas.presentation.api.routers import (
     analysis,
     analytics,
+    auth,
     backtest,
     decisions,
     explanations,
@@ -145,8 +148,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
+    app.add_middleware(RateLimitMiddleware)
+    app.add_middleware(AuthMiddleware)
 
     app.include_router(health.router, prefix=settings.api_prefix)
+    app.include_router(auth.router, prefix=settings.api_prefix)
     app.include_router(instruments.router, prefix=settings.api_prefix)
     app.include_router(market_data.router, prefix=settings.api_prefix)
     app.include_router(strategy.router, prefix=settings.api_prefix)

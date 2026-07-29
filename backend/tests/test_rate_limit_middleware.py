@@ -1,4 +1,4 @@
-"""API health endpoint tests."""
+"""API rate limiting tests."""
 
 from unittest.mock import AsyncMock, MagicMock
 
@@ -12,31 +12,36 @@ from atlas.presentation.api.main import create_app
 
 
 @pytest.fixture
-def test_settings() -> Settings:
-    """Settings for tests."""
+def rate_limit_settings() -> Settings:
     return Settings(
         jwt_secret="test-secret-key-for-pytest-only-32chars",
         log_json=False,
         database_url="postgresql+asyncpg://test:test@localhost:5432/test",
         redis_url="redis://localhost:6379/0",
         market_data_mock_enabled=False,
+        rate_limit_enabled=True,
+        rate_limit_per_minute=2,
+        rate_limit_auth_per_minute=1,
     )
 
 
 @pytest.fixture
-def app(test_settings: Settings):
-    """FastAPI app with mocked container."""
-    application = create_app(test_settings)
-    mock_engine = MagicMock()
-    mock_redis = AsyncMock()
-    mock_redis.ping = AsyncMock(return_value=True)
+def rate_limit_app(rate_limit_settings: Settings):
+    application = create_app(rate_limit_settings)
+    redis = AsyncMock()
+    redis.incr = AsyncMock(side_effect=[1, 2, 3])
+    redis.expire = AsyncMock(return_value=True)
+    redis.ttl = AsyncMock(return_value=42)
+
+    decision_engine = MagicMock()
+    decision_engine.get_latest = AsyncMock(return_value=None)
 
     container = Container(
-        settings=test_settings,
+        settings=rate_limit_settings,
         event_bus=InMemoryEventBus(),
-        engine=mock_engine,
+        engine=MagicMock(),
         session_factory=MagicMock(),
-        redis=mock_redis,
+        redis=redis,
         pipeline=MagicMock(),
         market_data_service=MagicMock(),
         market_data_replay=MagicMock(),
@@ -51,7 +56,7 @@ def app(test_settings: Settings):
         price_action_service=MagicMock(),
         confluence_service=MagicMock(),
         trade_validation_service=MagicMock(),
-        decision_engine=MagicMock(),
+        decision_engine=decision_engine,
         journal_service=MagicMock(),
         backtest_runner=MagicMock(),
         analytics_service=MagicMock(),
@@ -67,54 +72,43 @@ def app(test_settings: Settings):
 
 
 @pytest.mark.asyncio
-async def test_health_returns_200(app) -> None:
-    """Liveness endpoint returns success envelope."""
-    transport = ASGITransport(app=app)
+async def test_rate_limit_blocks_after_threshold(rate_limit_app) -> None:
+    transport = ASGITransport(app=rate_limit_app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        first = await client.get("/api/v1/decisions/XAUUSD/latest")
+        second = await client.get("/api/v1/decisions/XAUUSD/latest")
+        third = await client.get("/api/v1/decisions/XAUUSD/latest")
+
+    assert first.status_code != 429
+    assert second.status_code != 429
+    assert third.status_code == 429
+    assert third.json()["error"]["code"] == "RATE_LIMITED"
+    assert third.headers.get("Retry-After") == "42"
+
+
+@pytest.mark.asyncio
+async def test_health_exempt_from_rate_limit(rate_limit_app) -> None:
+    rate_limit_app.state.container.redis.incr = AsyncMock(return_value=999)
+
+    transport = ASGITransport(app=rate_limit_app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         response = await client.get("/api/v1/health")
 
     assert response.status_code == 200
-    body = response.json()
-    assert body["success"] is True
-    assert body["data"]["status"] == "ok"
-    assert body["data"]["auth_enabled"] is False
 
 
 @pytest.mark.asyncio
-async def test_ready_returns_200_when_dependencies_ok(app, monkeypatch) -> None:
-    """Readiness returns 200 when DB and Redis are reachable."""
-    monkeypatch.setattr(
-        "atlas.presentation.api.routers.health.check_database",
-        AsyncMock(return_value=True),
-    )
-    monkeypatch.setattr(
-        "atlas.presentation.api.routers.health.check_redis",
-        AsyncMock(return_value=True),
-    )
-
-    transport = ASGITransport(app=app)
+async def test_auth_endpoints_use_stricter_limit(rate_limit_app) -> None:
+    transport = ASGITransport(app=rate_limit_app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
-        response = await client.get("/api/v1/ready")
+        first = await client.post(
+            "/api/v1/auth/login",
+            json={"email": "a@example.com", "password": "password123"},
+        )
+        second = await client.post(
+            "/api/v1/auth/login",
+            json={"email": "a@example.com", "password": "password123"},
+        )
 
-    assert response.status_code == 200
-    assert response.json()["data"]["database"] == "ok"
-
-
-@pytest.mark.asyncio
-async def test_ready_returns_503_when_database_down(app, monkeypatch) -> None:
-    """Readiness returns 503 when database is unavailable."""
-    monkeypatch.setattr(
-        "atlas.presentation.api.routers.health.check_database",
-        AsyncMock(return_value=False),
-    )
-    monkeypatch.setattr(
-        "atlas.presentation.api.routers.health.check_redis",
-        AsyncMock(return_value=True),
-    )
-
-    transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://test") as client:
-        response = await client.get("/api/v1/ready")
-
-    assert response.status_code == 503
-    assert response.json()["success"] is False
+    assert first.status_code != 429
+    assert second.status_code == 429

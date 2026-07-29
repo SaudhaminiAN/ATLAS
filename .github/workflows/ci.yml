@@ -47,3 +47,16 @@ jobs:
 
       - name: Typecheck and build
         run: npm run build
+
+  docker-prod:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate production compose
+        run: docker compose -f docker/docker-compose.prod.yml config
+
+      - name: Build production images
+        env:
+          JWT_SECRET: test-secret-key-for-ci-pipeline-32chars
+        run: docker compose -f docker/docker-compose.prod.yml build

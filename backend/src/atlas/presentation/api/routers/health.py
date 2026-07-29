@@ -11,9 +11,17 @@ router = APIRouter(tags=["health"])
 
 
 @router.get("/health")
-async def health() -> ApiEnvelope[dict[str, str]]:
+async def health(request: Request) -> ApiEnvelope[dict[str, str | bool]]:
     """Liveness probe — process is running."""
-    return ApiEnvelope(success=True, data={"status": "ok"})
+    settings = request.app.state.settings
+    return ApiEnvelope(
+        success=True,
+        data={
+            "status": "ok",
+            "auth_enabled": settings.auth_enabled,
+            "auth_registration_enabled": settings.auth_registration_enabled,
+        },
+    )
 
 
 @router.get("/ready")

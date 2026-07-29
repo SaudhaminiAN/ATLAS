@@ -1,4 +1,5 @@
-import { Activity, Radio } from "lucide-react";
+import { Activity, LogOut, Radio } from "lucide-react";
+import { useAuth } from "../../context/AuthContext";
 import type { WsStatus } from "../../hooks/useWebSocket";
 
 interface HeaderProps {
@@ -9,6 +10,7 @@ interface HeaderProps {
 
 export function Header({ wsStatus, session, newsBlocked }: HeaderProps) {
   const live = wsStatus === "connected";
+  const { authRequired, user, logout } = useAuth();
 
   return (
     <header className="border-b border-zinc-800 bg-zinc-950/90 backdrop-blur-md sticky top-0 z-50">
@@ -19,6 +21,19 @@ export function Header({ wsStatus, session, newsBlocked }: HeaderProps) {
         </div>
 
         <div className="flex items-center gap-3 text-sm">
+          {authRequired && user && (
+            <span className="hidden lg:inline text-zinc-500">{user.email}</span>
+          )}
+          {authRequired && user && (
+            <button
+              type="button"
+              onClick={logout}
+              className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-zinc-800 text-zinc-300 hover:bg-zinc-700 transition"
+            >
+              <LogOut className="w-3 h-3" />
+              Sign out
+            </button>
+          )}
           {session && (
             <span className="hidden md:inline text-zinc-500 capitalize">
               {session.replace(/_/g, " ")} session

@@ -109,6 +109,13 @@ class Settings(BaseSettings):
     openai_api_key: str | None = None
     openai_model: str = "gpt-4o-mini"
 
+    auth_enabled: bool = False
+    auth_registration_enabled: bool = True
+
+    rate_limit_enabled: bool = False
+    rate_limit_per_minute: int = 120
+    rate_limit_auth_per_minute: int = 20
+
 
 @lru_cache
 def get_settings() -> Settings:

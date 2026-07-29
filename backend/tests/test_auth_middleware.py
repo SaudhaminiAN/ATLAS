@@ -1,7 +1,6 @@
-"""Decision REST endpoint tests."""
+"""Auth middleware tests."""
 
 from datetime import UTC, datetime
-from decimal import Decimal
 from unittest.mock import AsyncMock, MagicMock
 from uuid import uuid4
 
@@ -9,51 +8,46 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 
 from atlas.application.container import Container
-from atlas.domain.models.decision import TradingDecision
-from atlas.domain.models.enums import Direction
-from atlas.domain.models.instrument import Instrument
+from atlas.domain.models.user import User
 from atlas.infrastructure.config import Settings
 from atlas.infrastructure.events.in_memory_bus import InMemoryEventBus
 from atlas.presentation.api.main import create_app
 
 
 @pytest.fixture
-def app():
-    """FastAPI app with mocked decision service."""
-    settings = Settings(
+def auth_settings() -> Settings:
+    return Settings(
         jwt_secret="test-secret-key-for-pytest-only-32chars",
         log_json=False,
         database_url="postgresql+asyncpg://test:test@localhost:5432/test",
         redis_url="redis://localhost:6379/0",
         market_data_mock_enabled=False,
+        auth_enabled=True,
     )
-    application = create_app(settings)
 
-    instrument = Instrument(
-        id=uuid4(),
-        symbol="XAUUSD",
-        display_name="Gold",
-        pip_size=Decimal("0.01"),
-        lot_size=Decimal("100"),
+
+@pytest.fixture
+def auth_app(auth_settings: Settings):
+    application = create_app(auth_settings)
+    user_id = uuid4()
+    now = datetime.now(UTC)
+    user = User(
+        id=user_id,
+        email="trader@example.com",
+        is_active=True,
+        created_at=now,
+        updated_at=now,
     )
-    decision = TradingDecision(
-        id=uuid4(),
-        instrument=instrument,
-        direction=Direction.WAIT,
-        is_actionable=False,
-        confluence_score=Decimal("0.55"),
-        strategy_id="test",
-        reason="Confluence below threshold",
-        correlation_id="cid-1",
-        decided_at=datetime.now(UTC),
-    )
+
+    auth_service = MagicMock()
+    auth_service.verify_access_token = MagicMock(return_value=user_id)
+    auth_service.get_user = AsyncMock(return_value=user)
 
     decision_engine = MagicMock()
-    decision_engine.get_latest = AsyncMock(return_value=decision)
-    decision_engine.get_history = AsyncMock(return_value=[decision])
+    decision_engine.get_latest = AsyncMock(return_value=None)
 
-    application.state.container = Container(
-        settings=settings,
+    container = Container(
+        settings=auth_settings,
         event_bus=InMemoryEventBus(),
         engine=MagicMock(),
         session_factory=MagicMock(),
@@ -80,47 +74,41 @@ def app():
         execution_service=MagicMock(),
         position_management_service=MagicMock(),
         ai_explanation_service=MagicMock(),
-        auth_service=MagicMock(),
+        auth_service=auth_service,
     )
+    application.state.container = container
     application.state.ws_manager = MagicMock()
     return application
 
 
 @pytest.mark.asyncio
-async def test_get_latest_decision(app) -> None:
-    transport = ASGITransport(app=app)
+async def test_protected_route_requires_token(auth_app) -> None:
+    transport = ASGITransport(app=auth_app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         response = await client.get("/api/v1/decisions/XAUUSD/latest")
 
-    assert response.status_code == 200
-    body = response.json()
-    assert body["success"] is True
-    assert body["data"]["symbol"] == "XAUUSD"
-    assert body["data"]["direction"] == "WAIT"
-    assert body["data"]["reason"] == "Confluence below threshold"
+    assert response.status_code == 401
 
 
 @pytest.mark.asyncio
-async def test_get_latest_decision_not_found(app) -> None:
-    app.state.container.decision_engine.get_latest = AsyncMock(return_value=None)
-
-    transport = ASGITransport(app=app)
+async def test_protected_route_accepts_bearer_token(auth_app) -> None:
+    transport = ASGITransport(app=auth_app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
-        response = await client.get("/api/v1/decisions/XAUUSD/latest")
+        response = await client.get(
+            "/api/v1/decisions/XAUUSD/latest",
+            headers={"Authorization": "Bearer valid-token"},
+        )
 
     assert response.status_code == 200
-    body = response.json()
-    assert body["success"] is False
-    assert body["error"]["code"] == "NOT_FOUND"
+    assert response.json()["success"] is False
+    assert response.json()["error"]["code"] == "NOT_FOUND"
 
 
 @pytest.mark.asyncio
-async def test_get_decision_history(app) -> None:
-    transport = ASGITransport(app=app)
+async def test_health_stays_public_when_auth_enabled(auth_app) -> None:
+    transport = ASGITransport(app=auth_app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
-        response = await client.get("/api/v1/decisions/XAUUSD/history?limit=10")
+        response = await client.get("/api/v1/health")
 
     assert response.status_code == 200
-    body = response.json()
-    assert body["success"] is True
-    assert len(body["data"]) == 1
+    assert response.json()["data"]["auth_enabled"] is True

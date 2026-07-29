@@ -239,3 +239,23 @@ export interface Trade {
   remaining_size: string | number | null;
   partial_realized_pnl: string | number | null;
 }
+
+export interface HealthStatus {
+  status: string;
+  auth_enabled: boolean;
+  auth_registration_enabled: boolean;
+}
+
+export interface AuthTokens {
+  access_token: string;
+  refresh_token: string;
+  token_type: string;
+  expires_in: number;
+}
+
+export interface AuthUser {
+  id: string;
+  email: string;
+  is_active: boolean;
+  created_at: string;
+}

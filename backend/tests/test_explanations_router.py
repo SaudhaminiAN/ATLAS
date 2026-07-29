@@ -54,6 +54,7 @@ def app():
         execution_service=MagicMock(),
         position_management_service=MagicMock(),
         ai_explanation_service=ai_service,
+        auth_service=MagicMock(),
     )
     application.state.ws_manager = MagicMock()
     ai_service.enabled = True

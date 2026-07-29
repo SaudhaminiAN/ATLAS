@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { getAccessToken } from "../lib/api";
 
 export type WsStatus = "connecting" | "connected" | "disconnected" | "error";
 
@@ -35,7 +36,9 @@ export function useWebSocket<T>({
   const connect = useCallback(() => {
     if (!enabled) return;
 
-    const url = `${wsBaseUrl()}/api/v1/ws?channel=${encodeURIComponent(channel)}`;
+    const token = getAccessToken();
+    const tokenQuery = token ? `&access_token=${encodeURIComponent(token)}` : "";
+    const url = `${wsBaseUrl()}/api/v1/ws?channel=${encodeURIComponent(channel)}${tokenQuery}`;
     setStatus("connecting");
     const ws = new WebSocket(url);
     wsRef.current = ws;

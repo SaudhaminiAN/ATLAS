@@ -3,7 +3,16 @@
 import uuid
 from datetime import UTC, datetime
 
-from sqlalchemy import Boolean, DateTime, Numeric, String, Text
+from sqlalchemy import (
+    BigInteger,
+    Boolean,
+    DateTime,
+    ForeignKey,
+    Numeric,
+    String,
+    Text,
+    UniqueConstraint,
+)
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -46,6 +55,32 @@ class StrategyProfileModel(Base):
     )
 
 
+class OHLCVBarModel(Base):
+    """OHLCV bar storage."""
+
+    __tablename__ = "ohlcv_bars"
+    __table_args__ = (
+        UniqueConstraint("instrument_id", "timeframe", "open_time", name="uq_ohlcv_bar"),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    instrument_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("instruments.id"), nullable=False
+    )
+    timeframe: Mapped[str] = mapped_column(String(8), nullable=False)
+    open_time: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    open: Mapped[float] = mapped_column(Numeric(18, 6), nullable=False)
+    high: Mapped[float] = mapped_column(Numeric(18, 6), nullable=False)
+    low: Mapped[float] = mapped_column(Numeric(18, 6), nullable=False)
+    close: Mapped[float] = mapped_column(Numeric(18, 6), nullable=False)
+    volume: Mapped[float] = mapped_column(Numeric(18, 4), nullable=False, default=0)
+    is_outlier: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    quality_flags: Mapped[list] = mapped_column(JSONB, default=list, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC), nullable=False
+    )
+
+
 class MigrationMarkerModel(Base):
     """Tracks schema bootstrap for health checks."""
 
@@ -53,3 +88,22 @@ class MigrationMarkerModel(Base):
 
     key: Mapped[str] = mapped_column(String(64), primary_key=True)
     value: Mapped[str] = mapped_column(Text, nullable=False)
+
+
+class EconomicEventModel(Base):
+    """Synced economic calendar events."""
+
+    __tablename__ = "economic_events"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
+    name: Mapped[str] = mapped_column(String(256), nullable=False)
+    currency: Mapped[str] = mapped_column(String(8), nullable=False)
+    impact: Mapped[str] = mapped_column(String(16), nullable=False)
+    scheduled_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    actual: Mapped[float | None] = mapped_column(Numeric(18, 6), nullable=True)
+    forecast: Mapped[float | None] = mapped_column(Numeric(18, 6), nullable=True)
+    previous: Mapped[float | None] = mapped_column(Numeric(18, 6), nullable=True)
+    source: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC), nullable=False
+    )

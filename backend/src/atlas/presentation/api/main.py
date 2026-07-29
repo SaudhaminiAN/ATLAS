@@ -1,5 +1,6 @@
 """FastAPI application factory."""
 
+import asyncio
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
@@ -8,11 +9,23 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from atlas.application.container import build_container
+from atlas.application.market_context.handler import make_bar_context_handler
+from atlas.application.market_data.stream import run_mock_market_data_stream
+from atlas.application.news.sync import run_news_calendar_sync
 from atlas.infrastructure.cache.redis_client import create_redis
 from atlas.infrastructure.config import Settings, get_settings
 from atlas.infrastructure.logging import configure_logging
 from atlas.infrastructure.persistence.database import create_engine
-from atlas.presentation.api.routers import health
+from atlas.presentation.api.routers import (
+    analysis,
+    health,
+    instruments,
+    market_data,
+    news,
+    strategy,
+)
+from atlas.presentation.api.websocket import routes as ws_routes
+from atlas.presentation.api.websocket.manager import WebSocketManager
 
 logger = structlog.get_logger(__name__)
 
@@ -29,8 +42,37 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     container = build_container(settings, engine, redis)
     app.state.container = container
 
+    ws_manager = WebSocketManager()
+    app.state.ws_manager = ws_manager
+    container.event_bus.subscribe("market_data.bar.received", ws_manager.on_bar_received)
+    container.event_bus.subscribe(
+        "market_data.bar.received",
+        make_bar_context_handler(container, settings),
+    )
+
+    mock_task: asyncio.Task | None = None
+    news_task: asyncio.Task | None = None
+    if settings.market_data_mock_enabled:
+        mock_task = asyncio.create_task(run_mock_market_data_stream(container, settings))
+    if settings.news_mock_enabled:
+        news_task = asyncio.create_task(run_news_calendar_sync(container, settings))
+
     logger.info("atlas_started", api_prefix=settings.api_prefix)
     yield
+
+    if mock_task:
+        mock_task.cancel()
+        try:
+            await mock_task
+        except asyncio.CancelledError:
+            pass
+
+    if news_task:
+        news_task.cancel()
+        try:
+            await news_task
+        except asyncio.CancelledError:
+            pass
 
     await redis.aclose()
     await engine.dispose()
@@ -59,6 +101,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     )
 
     app.include_router(health.router, prefix=settings.api_prefix)
+    app.include_router(instruments.router, prefix=settings.api_prefix)
+    app.include_router(market_data.router, prefix=settings.api_prefix)
+    app.include_router(strategy.router, prefix=settings.api_prefix)
+    app.include_router(news.router, prefix=settings.api_prefix)
+    app.include_router(analysis.router, prefix=settings.api_prefix)
+    app.include_router(ws_routes.router, prefix=settings.api_prefix)
 
     return app
 

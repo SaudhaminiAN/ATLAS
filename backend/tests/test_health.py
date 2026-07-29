@@ -19,6 +19,7 @@ def test_settings() -> Settings:
         log_json=False,
         database_url="postgresql+asyncpg://test:test@localhost:5432/test",
         redis_url="redis://localhost:6379/0",
+        market_data_mock_enabled=False,
     )
 
 
@@ -37,8 +38,16 @@ def app(test_settings: Settings):
         session_factory=MagicMock(),
         redis=mock_redis,
         pipeline=MagicMock(),
+        market_data_service=MagicMock(),
+        market_data_replay=MagicMock(),
+        mock_provider=MagicMock(),
+        bar_cache=MagicMock(),
+        strategy_engine=MagicMock(),
+        news_filter=MagicMock(),
+        market_context_service=MagicMock(),
     )
     application.state.container = container
+    application.state.ws_manager = MagicMock()
     return application
 
 

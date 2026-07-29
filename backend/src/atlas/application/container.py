@@ -6,20 +6,26 @@ from decimal import Decimal
 from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
+from atlas.application.confluence.service import ConfluenceConfig, ConfluenceService
+from atlas.application.decision.service import DecisionEngineService
 from atlas.application.market_context.service import MarketContextConfig, MarketContextService
 from atlas.application.market_data.service import MarketDataConfig, MarketDataService
 from atlas.application.mtf.service import MTFConfig, MultiTimeframeAnalysisService
 from atlas.application.news.service import NewsFilterService
-from atlas.application.pipeline.orchestrator import AnalysisPipelineOrchestrator
+from atlas.application.pipeline.orchestrator import AnalysisPipelineOrchestrator, PipelineConfig
+from atlas.application.price_action.service import PriceActionConfig, PriceActionService
 from atlas.application.smc.service import SmartMoneyConceptsService, SMCConfig
 from atlas.application.strategy.service import StrategyEngineService
 from atlas.application.technical.service import TechnicalAnalysisConfig, TechnicalAnalysisService
+from atlas.application.validation.service import TradeValidationConfig, TradeValidationService
 from atlas.domain.models.enums import Timeframe
 from atlas.domain.ports.event_bus import EventBusProtocol
 from atlas.domain.services.news_window import NewsFilterConfig
 from atlas.infrastructure.cache.bar_cache import BarCache
 from atlas.infrastructure.cache.context_cache import ContextCache
+from atlas.infrastructure.cache.decision_cache import DecisionCache
 from atlas.infrastructure.cache.news_cache import NewsEventCache
+from atlas.infrastructure.cache.pipeline_dedupe import PipelineDedupeCache
 from atlas.infrastructure.cache.strategy_cache import StrategyProfileCache
 from atlas.infrastructure.config import Settings
 from atlas.infrastructure.events.in_memory_bus import InMemoryEventBus
@@ -48,6 +54,10 @@ class Container:
     mtf_service: MultiTimeframeAnalysisService
     technical_analysis_service: TechnicalAnalysisService
     smc_service: SmartMoneyConceptsService
+    price_action_service: PriceActionService
+    confluence_service: ConfluenceService
+    trade_validation_service: TradeValidationService
+    decision_engine: DecisionEngineService
 
 
 def build_container(settings: Settings, engine: AsyncEngine, redis: Redis) -> Container:
@@ -129,16 +139,107 @@ def build_container(settings: Settings, engine: AsyncEngine, redis: Redis) -> Co
         ),
     )
 
+    price_action_service = PriceActionService(
+        market_data_service=market_data_service,
+        technical_analysis_service=technical_analysis_service,
+        smc_service=smc_service,
+        event_bus=event_bus,
+        config=PriceActionConfig(
+            level_proximity_pct=Decimal(str(settings.price_action_level_proximity_pct)),
+            min_pattern_strength=Decimal(str(settings.price_action_min_pattern_strength)),
+            displacement_atr_multiplier=Decimal(
+                str(settings.price_action_displacement_atr_multiplier)
+            ),
+            min_bars=settings.price_action_min_bars,
+            bar_lookback=settings.price_action_bar_lookback,
+        ),
+    )
+
+    news_filter = NewsFilterService(
+        session_factory=session_factory,
+        event_bus=event_bus,
+        provider=MockNewsCalendarProvider(),
+        event_cache=news_cache,
+        config=NewsFilterConfig(
+            hard_block_minutes_before=settings.news_hard_block_minutes_before,
+            hard_block_minutes_after=settings.news_hard_block_minutes_after,
+            soft_downgrade_minutes_before=settings.news_soft_downgrade_minutes_before,
+            soft_downgrade_minutes_after=settings.news_soft_downgrade_minutes_after,
+            soft_downgrade_penalty=Decimal(str(settings.news_soft_downgrade_penalty)),
+        ),
+        stale_warning_minutes=settings.news_calendar_stale_warning_minutes,
+    )
+
+    confluence_service = ConfluenceService(
+        market_context_service=market_context_service,
+        mtf_service=mtf_service,
+        technical_analysis_service=technical_analysis_service,
+        smc_service=smc_service,
+        price_action_service=price_action_service,
+        news_filter=news_filter,
+        strategy_engine=strategy_engine,
+        event_bus=event_bus,
+        config=ConfluenceConfig(
+            min_evidence_count=settings.confluence_min_evidence_count,
+            primary_timeframe=Timeframe(settings.market_context_primary_timeframe),
+        ),
+    )
+
+    trade_validation_service = TradeValidationService(
+        market_data_service=market_data_service,
+        confluence_service=confluence_service,
+        mtf_service=mtf_service,
+        technical_analysis_service=technical_analysis_service,
+        smc_service=smc_service,
+        market_context_service=market_context_service,
+        news_filter=news_filter,
+        strategy_engine=strategy_engine,
+        event_bus=event_bus,
+        config=TradeValidationConfig(
+            primary_timeframe=Timeframe(settings.market_context_primary_timeframe),
+        ),
+    )
+
+    decision_engine = DecisionEngineService(
+        event_bus=event_bus,
+        session_factory=session_factory,
+        decision_cache=DecisionCache(redis),
+    )
+    dedupe_cache = PipelineDedupeCache(
+        redis,
+        ttl_seconds=settings.pipeline_dedupe_window_seconds,
+    )
+
+    pipeline = AnalysisPipelineOrchestrator(
+        market_data_service=market_data_service,
+        market_context_service=market_context_service,
+        mtf_service=mtf_service,
+        technical_analysis_service=technical_analysis_service,
+        smc_service=smc_service,
+        price_action_service=price_action_service,
+        news_filter=news_filter,
+        confluence_service=confluence_service,
+        trade_validation_service=trade_validation_service,
+        decision_engine=decision_engine,
+        strategy_engine=strategy_engine,
+        dedupe_cache=dedupe_cache,
+        event_bus=event_bus,
+        session_factory=session_factory,
+        config=PipelineConfig(
+            primary_timeframe=Timeframe(settings.market_context_primary_timeframe),
+            risk_enabled=settings.pipeline_risk_enabled,
+            stage_timeout_seconds=settings.pipeline_stage_timeout_seconds,
+            dedupe_window_seconds=settings.pipeline_dedupe_window_seconds,
+        ),
+    )
+
     return Container(
         settings=settings,
         event_bus=event_bus,
         engine=engine,
         session_factory=session_factory,
         redis=redis,
-        pipeline=AnalysisPipelineOrchestrator(
-            event_bus=event_bus,
-            risk_enabled=settings.pipeline_risk_enabled,
-        ),
+        pipeline=pipeline,
         market_data_service=market_data_service,
         market_data_replay=DatabaseMarketDataReplay(session_factory),
         mock_provider=MockMarketDataProvider(
@@ -146,22 +247,13 @@ def build_container(settings: Settings, engine: AsyncEngine, redis: Redis) -> Co
         ),
         bar_cache=bar_cache,
         strategy_engine=strategy_engine,
-        news_filter=NewsFilterService(
-            session_factory=session_factory,
-            event_bus=event_bus,
-            provider=MockNewsCalendarProvider(),
-            event_cache=news_cache,
-            config=NewsFilterConfig(
-                hard_block_minutes_before=settings.news_hard_block_minutes_before,
-                hard_block_minutes_after=settings.news_hard_block_minutes_after,
-                soft_downgrade_minutes_before=settings.news_soft_downgrade_minutes_before,
-                soft_downgrade_minutes_after=settings.news_soft_downgrade_minutes_after,
-                soft_downgrade_penalty=Decimal(str(settings.news_soft_downgrade_penalty)),
-            ),
-            stale_warning_minutes=settings.news_calendar_stale_warning_minutes,
-        ),
+        news_filter=news_filter,
         market_context_service=market_context_service,
         mtf_service=mtf_service,
         technical_analysis_service=technical_analysis_service,
         smc_service=smc_service,
+        price_action_service=price_action_service,
+        confluence_service=confluence_service,
+        trade_validation_service=trade_validation_service,
+        decision_engine=decision_engine,
     )

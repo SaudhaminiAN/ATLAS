@@ -40,6 +40,8 @@ class Settings(BaseSettings):
     market_data_gap_tolerance_bars: int = 1
 
     pipeline_risk_enabled: bool = False
+    pipeline_stage_timeout_seconds: float = 5.0
+    pipeline_dedupe_window_seconds: int = 60
 
     news_hard_block_minutes_before: int = 15
     news_hard_block_minutes_after: int = 15
@@ -73,6 +75,14 @@ class Settings(BaseSettings):
     smc_fvg_fill_pct: float = 0.50
     smc_min_bars: int = 50
     smc_bar_lookback: int = 120
+
+    price_action_level_proximity_pct: float = 0.0015
+    price_action_min_pattern_strength: float = 0.30
+    price_action_displacement_atr_multiplier: float = 1.5
+    price_action_min_bars: int = 3
+    price_action_bar_lookback: int = 120
+
+    confluence_min_evidence_count: int = 3
 
 
 @lru_cache

@@ -107,3 +107,49 @@ class EconomicEventModel(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(UTC), nullable=False
     )
+
+
+class PipelineRunModel(Base):
+    """Pipeline execution audit log."""
+
+    __tablename__ = "pipeline_runs"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
+    correlation_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    instrument_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("instruments.id"), nullable=False
+    )
+    trigger_timeframe: Mapped[str] = mapped_column(String(8), nullable=False)
+    trigger_bar_time: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False)
+    stage_results: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    duration_ms: Mapped[int | None] = mapped_column(nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC), nullable=False
+    )
+
+
+class DecisionModel(Base):
+    """Immutable trading decision record."""
+
+    __tablename__ = "decisions"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
+    instrument_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("instruments.id"), nullable=False
+    )
+    correlation_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    direction: Mapped[str] = mapped_column(String(8), nullable=False)
+    is_actionable: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    reason: Mapped[str] = mapped_column(String(512), nullable=False)
+    confidence: Mapped[float] = mapped_column(Numeric(6, 4), nullable=False)
+    strategy_profile_id: Mapped[str] = mapped_column(
+        String(64), ForeignKey("strategy_profiles.id"), nullable=False
+    )
+    confluence_snapshot: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    validation_result: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    risk_snapshot: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    news_status: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC), nullable=False
+    )

@@ -42,6 +42,22 @@ class WebSocketManager:
         for ws in dead:
             await self.disconnect(channel, ws)
 
+    def on_decision_emitted(self, event: DomainEvent) -> None:
+        """Event bus handler for decision.emitted."""
+        symbol = event.payload.get("symbol", "XAUUSD")
+        channel = f"decisions.{symbol}"
+        message = {
+            "channel": channel,
+            "event": "decision.emitted",
+            "payload": event.payload,
+            "timestamp": event.occurred_at.isoformat(),
+        }
+        try:
+            loop = asyncio.get_running_loop()
+            loop.create_task(self.broadcast(channel, message))
+        except RuntimeError:
+            pass
+
     def on_bar_received(self, event: DomainEvent) -> None:
         """Event bus handler for market_data.bar.received."""
         symbol = event.payload.get("symbol", "XAUUSD")

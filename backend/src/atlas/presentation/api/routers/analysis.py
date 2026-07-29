@@ -4,13 +4,18 @@ from datetime import datetime
 
 from fastapi import APIRouter, Query, Request
 
+from atlas.domain.models.confluence import ConfluenceResult
 from atlas.domain.models.enums import Timeframe
 from atlas.domain.models.market_context import MarketContext
 from atlas.domain.models.mtf import MTFAnalysis
+from atlas.domain.models.price_action import CandlePattern, PriceActionResult
 from atlas.domain.models.smc import SMCAnalysisResult, StructureBreak
 from atlas.domain.models.technical import TechnicalAnalysisResult
+from atlas.domain.models.validation import ValidationResult
+from atlas.presentation.api.dtos.confluence import ConfluenceDTO, EvidenceItemDTO, ModuleScoreDTO
 from atlas.presentation.api.dtos.market_context import MarketContextDTO
 from atlas.presentation.api.dtos.mtf import MTFAnalysisDTO, TimeframeBiasDTO
+from atlas.presentation.api.dtos.price_action import CandlePatternDTO, PriceActionDTO
 from atlas.presentation.api.dtos.smc import (
     FairValueGapDTO,
     LiquidityPoolDTO,
@@ -19,6 +24,7 @@ from atlas.presentation.api.dtos.smc import (
     StructureBreakDTO,
 )
 from atlas.presentation.api.dtos.technical import PriceLevelDTO, TechnicalAnalysisDTO
+from atlas.presentation.api.dtos.validation import ValidationResultDTO, ValidationRuleResultDTO
 from atlas.presentation.api.schemas import ApiEnvelope, ApiError
 
 router = APIRouter(prefix="/analysis", tags=["analysis"])
@@ -236,3 +242,152 @@ async def get_smc_analysis(
         )
 
     return ApiEnvelope(success=True, data=_smc_to_dto(result))
+
+
+def _pattern_to_dto(pattern: CandlePattern) -> CandlePatternDTO:
+    return CandlePatternDTO(
+        pattern_type=pattern.pattern_type,
+        direction=pattern.direction.value,
+        bar_index=pattern.bar_index,
+        strength=pattern.strength,
+        at_key_level=pattern.at_key_level,
+    )
+
+
+def _price_action_to_dto(result: PriceActionResult) -> PriceActionDTO:
+    return PriceActionDTO(
+        symbol=result.instrument.symbol,
+        timeframe=result.timeframe.value,
+        patterns=[_pattern_to_dto(pattern) for pattern in result.patterns],
+        strongest_pattern=(
+            _pattern_to_dto(result.strongest_pattern) if result.strongest_pattern else None
+        ),
+        computed_at=result.computed_at,
+    )
+
+
+@router.get("/{symbol}/price-action")
+async def get_price_action_analysis(
+    request: Request,
+    symbol: str,
+    timeframe: Timeframe = Query(default=Timeframe.M15),
+    as_of: datetime | None = Query(default=None),
+) -> ApiEnvelope[PriceActionDTO]:
+    """Price action pattern analysis snapshot for a symbol/timeframe."""
+    service = request.app.state.container.price_action_service
+    result = await service.analyze_symbol(symbol, timeframe=timeframe, as_of=as_of)
+
+    if not result:
+        return ApiEnvelope(
+            success=False,
+            data=None,
+            error=ApiError(
+                code="NOT_FOUND",
+                message="Instrument not found or insufficient bar data",
+            ),
+        )
+
+    return ApiEnvelope(success=True, data=_price_action_to_dto(result))
+
+
+def _confluence_to_dto(result: ConfluenceResult) -> ConfluenceDTO:
+    return ConfluenceDTO(
+        symbol=result.instrument.symbol,
+        suggested_direction=result.suggested_direction.value,
+        total_score=result.total_score,
+        raw_score=result.raw_score,
+        bullish_raw=result.bullish_raw,
+        bearish_raw=result.bearish_raw,
+        news_penalty=result.news_penalty,
+        module_scores=[
+            ModuleScoreDTO(
+                source=module.source,
+                direction=module.direction.value,
+                score=module.score,
+                weight=module.weight,
+                weighted_contribution=module.weighted_contribution,
+            )
+            for module in result.module_scores
+        ],
+        evidence=[
+            EvidenceItemDTO(
+                source=item.source,
+                direction=item.direction.value,
+                weight=item.weight,
+                score=item.score,
+                weighted_contribution=item.weighted_contribution,
+                description=item.description,
+            )
+            for item in result.evidence
+        ],
+        evidence_count=result.evidence_count,
+        has_conflict=result.has_conflict,
+        strategy_profile_id=result.strategy_profile_id,
+        computed_at=result.computed_at,
+    )
+
+
+@router.get("/{symbol}/confluence")
+async def get_confluence_analysis(
+    request: Request,
+    symbol: str,
+    as_of: datetime | None = Query(default=None),
+) -> ApiEnvelope[ConfluenceDTO]:
+    """Weighted confluence score for a symbol."""
+    service = request.app.state.container.confluence_service
+    result = await service.calculate_symbol(symbol, as_of=as_of)
+
+    if not result:
+        return ApiEnvelope(
+            success=False,
+            data=None,
+            error=ApiError(
+                code="NOT_FOUND",
+                message="Instrument not found or insufficient analysis data",
+            ),
+        )
+
+    return ApiEnvelope(success=True, data=_confluence_to_dto(result))
+
+
+def _validation_to_dto(result: ValidationResult) -> ValidationResultDTO:
+    return ValidationResultDTO(
+        symbol=result.instrument.symbol,
+        direction=result.direction.value,
+        is_valid=result.is_valid,
+        rules=[
+            ValidationRuleResultDTO(
+                rule_name=rule.rule_name,
+                passed=rule.passed,
+                reason=rule.reason,
+                enabled=rule.enabled,
+            )
+            for rule in result.rules
+        ],
+        failed_rules=list(result.failed_rules),
+        strategy_profile_id=result.strategy_profile_id,
+        validated_at=result.validated_at,
+    )
+
+
+@router.get("/{symbol}/validation")
+async def get_validation_result(
+    request: Request,
+    symbol: str,
+    as_of: datetime | None = Query(default=None),
+) -> ApiEnvelope[ValidationResultDTO]:
+    """Trade validation result for a symbol."""
+    service = request.app.state.container.trade_validation_service
+    result = await service.validate_symbol(symbol, as_of=as_of)
+
+    if not result:
+        return ApiEnvelope(
+            success=False,
+            data=None,
+            error=ApiError(
+                code="NOT_FOUND",
+                message="Instrument not found or insufficient analysis data",
+            ),
+        )
+
+    return ApiEnvelope(success=True, data=_validation_to_dto(result))

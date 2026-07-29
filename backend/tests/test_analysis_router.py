@@ -8,8 +8,10 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 
 from atlas.application.container import Container
+from atlas.domain.models.confluence import ConfluenceResult
 from atlas.domain.models.enums import (
     Bias,
+    Direction,
     SpreadStatus,
     Timeframe,
     TradingSession,
@@ -18,8 +20,10 @@ from atlas.domain.models.enums import (
 )
 from atlas.domain.models.market_context import MarketContext
 from atlas.domain.models.mtf import MTFAnalysis, TimeframeBias
+from atlas.domain.models.price_action import CandlePattern, PriceActionResult
 from atlas.domain.models.smc import SMCAnalysisResult
 from atlas.domain.models.technical import TechnicalAnalysisResult
+from atlas.domain.models.validation import ValidationResult
 from atlas.infrastructure.config import Settings
 from atlas.infrastructure.events.in_memory_bus import InMemoryEventBus
 from atlas.presentation.api.main import create_app
@@ -125,6 +129,64 @@ def app():
                 )
             )
         ),
+        price_action_service=MagicMock(
+            analyze_symbol=AsyncMock(
+                return_value=PriceActionResult(
+                    instrument=MagicMock(symbol="XAUUSD"),
+                    timeframe=Timeframe.M15,
+                    patterns=(
+                        CandlePattern(
+                            pattern_type="engulfing",
+                            direction=Bias.BULLISH,
+                            bar_index=10,
+                            strength=Decimal("0.82"),
+                            at_key_level=True,
+                        ),
+                    ),
+                    strongest_pattern=CandlePattern(
+                        pattern_type="engulfing",
+                        direction=Bias.BULLISH,
+                        bar_index=10,
+                        strength=Decimal("0.82"),
+                        at_key_level=True,
+                    ),
+                    computed_at=datetime.now(UTC),
+                )
+            )
+        ),
+        confluence_service=MagicMock(
+            calculate_symbol=AsyncMock(
+                return_value=ConfluenceResult(
+                    instrument=MagicMock(symbol="XAUUSD"),
+                    suggested_direction=Direction.BUY,
+                    total_score=Decimal("0.81"),
+                    raw_score=Decimal("0.81"),
+                    bullish_raw=Decimal("0.81"),
+                    bearish_raw=Decimal("0.05"),
+                    news_penalty=Decimal("0"),
+                    module_scores=(),
+                    evidence=(),
+                    evidence_count=4,
+                    has_conflict=False,
+                    strategy_profile_id="xauusd_conservative",
+                    computed_at=datetime.now(UTC),
+                )
+            )
+        ),
+        trade_validation_service=MagicMock(
+            validate_symbol=AsyncMock(
+                return_value=ValidationResult(
+                    instrument=MagicMock(symbol="XAUUSD"),
+                    direction=Direction.BUY,
+                    is_valid=True,
+                    rules=(),
+                    failed_rules=(),
+                    strategy_profile_id="xauusd_conservative",
+                    validated_at=datetime.now(UTC),
+                )
+            )
+        ),
+        decision_engine=MagicMock(),
     )
     application.state.ws_manager = MagicMock()
     return application
@@ -180,3 +242,42 @@ async def test_get_smc_analysis(app) -> None:
     assert body["success"] is True
     assert body["data"]["trend"] == "uptrend"
     assert body["data"]["directional_bias"] == "bullish"
+
+
+@pytest.mark.asyncio
+async def test_get_price_action_analysis(app) -> None:
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.get("/api/v1/analysis/XAUUSD/price-action")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["success"] is True
+    assert body["data"]["strongest_pattern"]["pattern_type"] == "engulfing"
+    assert body["data"]["strongest_pattern"]["strength"] == "0.82"
+
+
+@pytest.mark.asyncio
+async def test_get_confluence_analysis(app) -> None:
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.get("/api/v1/analysis/XAUUSD/confluence")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["success"] is True
+    assert body["data"]["suggested_direction"] == "BUY"
+    assert body["data"]["total_score"] == "0.81"
+
+
+@pytest.mark.asyncio
+async def test_get_validation_result(app) -> None:
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.get("/api/v1/analysis/XAUUSD/validation")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["success"] is True
+    assert body["data"]["is_valid"] is True
+    assert body["data"]["direction"] == "BUY"

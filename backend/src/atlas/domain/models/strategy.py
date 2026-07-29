@@ -39,6 +39,8 @@ class StrategyProfile:
 
     def is_direction_enabled(self, direction: Direction) -> bool:
         """Return True if the profile allows trading in this direction."""
+        if direction == Direction.WAIT:
+            return True
         return direction in self.enabled_directions
 
     def is_rule_enabled(self, rule_name: str) -> bool:

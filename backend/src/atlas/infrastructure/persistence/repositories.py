@@ -8,15 +8,27 @@ from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from atlas.domain.models.enums import Timeframe
+from atlas.domain.models.decision import TradingDecision
+from atlas.domain.models.enums import Direction, Timeframe
 from atlas.domain.models.instrument import Instrument
 from atlas.domain.models.news import EconomicEvent, EventImpact
 from atlas.domain.models.ohlcv import OHLCVBar
+from atlas.domain.models.pipeline import PipelineRun, StageResult
 from atlas.domain.models.strategy import DEFAULT_PROFILE_ID, StrategyProfile
+from atlas.infrastructure.persistence.decision_serializers import (
+    confluence_from_dict,
+    confluence_to_dict,
+    news_status_from_dict,
+    news_status_to_dict,
+    validation_from_dict,
+    validation_to_dict,
+)
 from atlas.infrastructure.persistence.models import (
+    DecisionModel,
     EconomicEventModel,
     InstrumentModel,
     OHLCVBarModel,
+    PipelineRunModel,
     StrategyProfileModel,
 )
 
@@ -339,3 +351,143 @@ class EconomicEventRepository:
         query = query.order_by(EconomicEventModel.scheduled_at.asc())
         result = await self._session.execute(query)
         return [economic_event_to_domain(row) for row in result.scalars().all()]
+
+
+def _stage_results_to_json(stage_results: dict[str, StageResult]) -> dict:
+    return {
+        name: {
+            "stage_name": result.stage_name,
+            "status": result.status,
+            "duration_ms": result.duration_ms,
+            "error": result.error,
+        }
+        for name, result in stage_results.items()
+    }
+
+
+class PipelineRunRepository:
+    """Pipeline run audit persistence."""
+
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
+
+    async def insert(self, run: PipelineRun) -> None:
+        """Persist a completed or failed pipeline run."""
+        if run.instrument is None or run.trigger_bar_time is None:
+            return
+
+        model = PipelineRunModel(
+            id=run.id,
+            correlation_id=run.correlation_id,
+            instrument_id=run.instrument.id,
+            trigger_timeframe=run.trigger_timeframe.value,
+            trigger_bar_time=run.trigger_bar_time,
+            status=run.status.value,
+            stage_results=_stage_results_to_json(run.stage_results),
+            duration_ms=run.duration_ms,
+            created_at=run.started_at,
+        )
+        self._session.add(model)
+        await self._session.commit()
+
+
+def _decision_model_to_domain(model: DecisionModel, instrument: Instrument) -> TradingDecision:
+    confluence = (
+        confluence_from_dict(model.confluence_snapshot, instrument)
+        if model.confluence_snapshot
+        else None
+    )
+    validation = (
+        validation_from_dict(model.validation_result, instrument)
+        if model.validation_result
+        else None
+    )
+    news = news_status_from_dict(model.news_status) if model.news_status else None
+    return TradingDecision(
+        id=model.id,
+        instrument=instrument,
+        direction=Direction(model.direction),
+        is_actionable=model.is_actionable,
+        confluence_score=Decimal(str(model.confidence)),
+        strategy_id=model.strategy_profile_id,
+        reason=model.reason,
+        correlation_id=model.correlation_id,
+        decided_at=model.created_at,
+        confluence_snapshot=confluence,
+        validation_snapshot=validation,
+        risk_snapshot=model.risk_snapshot,
+        news_status=news,
+    )
+
+
+class DecisionRepository:
+    """Trading decision persistence."""
+
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
+
+    async def insert(self, decision: TradingDecision) -> None:
+        """Persist an immutable decision record."""
+        model = DecisionModel(
+            id=decision.id,
+            instrument_id=decision.instrument.id,
+            correlation_id=decision.correlation_id,
+            direction=decision.direction.value,
+            is_actionable=decision.is_actionable,
+            reason=decision.reason,
+            confidence=decision.confluence_score,
+            strategy_profile_id=decision.strategy_id,
+            confluence_snapshot=(
+                confluence_to_dict(decision.confluence_snapshot)
+                if decision.confluence_snapshot
+                else None
+            ),
+            validation_result=(
+                validation_to_dict(decision.validation_snapshot)
+                if decision.validation_snapshot
+                else None
+            ),
+            risk_snapshot=decision.risk_snapshot,
+            news_status=(
+                news_status_to_dict(decision.news_status) if decision.news_status else None
+            ),
+            created_at=decision.decided_at,
+        )
+        self._session.add(model)
+        await self._session.commit()
+
+    async def get_latest(self, symbol: str) -> TradingDecision | None:
+        """Return the most recent decision for a symbol."""
+        result = await self._session.execute(
+            select(DecisionModel, InstrumentModel)
+            .join(InstrumentModel, DecisionModel.instrument_id == InstrumentModel.id)
+            .where(InstrumentModel.symbol == symbol.upper())
+            .order_by(DecisionModel.created_at.desc())
+            .limit(1)
+        )
+        row = result.first()
+        if not row:
+            return None
+        decision_model, instrument_model = row
+        return _decision_model_to_domain(decision_model, instrument_to_domain(instrument_model))
+
+    async def list_history(
+        self,
+        symbol: str,
+        *,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> list[TradingDecision]:
+        """Return paginated decision history for a symbol."""
+        result = await self._session.execute(
+            select(DecisionModel, InstrumentModel)
+            .join(InstrumentModel, DecisionModel.instrument_id == InstrumentModel.id)
+            .where(InstrumentModel.symbol == symbol.upper())
+            .order_by(DecisionModel.created_at.desc())
+            .limit(limit)
+            .offset(offset)
+        )
+        return [
+            _decision_model_to_domain(decision_model, instrument_to_domain(instrument_model))
+            for decision_model, instrument_model in result.all()
+        ]

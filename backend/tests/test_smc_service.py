@@ -76,8 +76,9 @@ def test_analyze_is_deterministic(smc_service) -> None:
     service, _ = smc_service
     instrument = _instrument()
     bars = _bars(80)
-    first = service.analyze(instrument, Timeframe.M15, bars)
-    second = service.analyze(instrument, Timeframe.M15, bars)
+    computed_at = datetime(2026, 1, 1, tzinfo=UTC)
+    first = service.analyze(instrument, Timeframe.M15, bars, computed_at=computed_at)
+    second = service.analyze(instrument, Timeframe.M15, bars, computed_at=computed_at)
     assert first == second
 
 

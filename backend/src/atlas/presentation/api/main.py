@@ -12,12 +12,14 @@ from atlas.application.container import build_container
 from atlas.application.market_context.handler import make_bar_context_handler
 from atlas.application.market_data.stream import run_mock_market_data_stream
 from atlas.application.news.sync import run_news_calendar_sync
+from atlas.application.pipeline.handler import make_pipeline_bar_handler
 from atlas.infrastructure.cache.redis_client import create_redis
 from atlas.infrastructure.config import Settings, get_settings
 from atlas.infrastructure.logging import configure_logging
 from atlas.infrastructure.persistence.database import create_engine
 from atlas.presentation.api.routers import (
     analysis,
+    decisions,
     health,
     instruments,
     market_data,
@@ -45,9 +47,14 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     ws_manager = WebSocketManager()
     app.state.ws_manager = ws_manager
     container.event_bus.subscribe("market_data.bar.received", ws_manager.on_bar_received)
+    container.event_bus.subscribe("decision.emitted", ws_manager.on_decision_emitted)
     container.event_bus.subscribe(
         "market_data.bar.received",
         make_bar_context_handler(container, settings),
+    )
+    container.event_bus.subscribe(
+        "market_data.bar.received",
+        make_pipeline_bar_handler(container, settings),
     )
 
     mock_task: asyncio.Task | None = None
@@ -106,6 +113,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(strategy.router, prefix=settings.api_prefix)
     app.include_router(news.router, prefix=settings.api_prefix)
     app.include_router(analysis.router, prefix=settings.api_prefix)
+    app.include_router(decisions.router, prefix=settings.api_prefix)
     app.include_router(ws_routes.router, prefix=settings.api_prefix)
 
     return app
